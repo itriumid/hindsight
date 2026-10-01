@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import Clips from "$lib/components/Clips.svelte";
   import Settings, { type SettingsView } from "$lib/components/Settings.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
 
@@ -158,6 +159,8 @@
     </div>
     <p class="hint">Or from the menu bar icon, without opening this window.</p>
   </section>
+
+  <Clips {folder} />
 
   <section class="folder">
     <h2>Clips folder</h2>

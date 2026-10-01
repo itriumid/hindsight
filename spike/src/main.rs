@@ -12,6 +12,7 @@
 //!   compare [seconds] [microphone]                    record once without loss, then encode the
 //!                                                     same speech at complexity 10, 5 and 3 for
 //!                                                     a listening test
+//!   seek    <clip.opus> <seconds>                     time opening a clip at a position
 //!   verify  <clip.opus>                               decode a clip and write a WAV beside it
 //!
 //! Nothing here is the application; it's measurements to decide the application's design. The
@@ -45,6 +46,7 @@ fn main() {
         Some("devices") => devices(),
         Some("record") => record(number(1, 30.0), number(2, 180.0), number(3, 1.0), arguments.get(4), arguments.get(5)),
         Some("compare") => compare(number(1, 20.0), arguments.get(2)),
+        Some("seek") => seek(Path::new(arguments.get(1).expect("seek needs a clip path")), number(2, 0.0)),
         Some("verify") => verify(Path::new(arguments.get(1).expect("verify needs a clip path"))),
         _ => eprintln!("usage: hindsight-spike bench|record|verify (see src/main.rs)"),
     }
@@ -145,6 +147,23 @@ fn save_snapshot(snapshot: &Snapshot, save_minutes: f64, name: &str) {
         started.elapsed().as_secs_f64() * 1000.0
     );
     verify(&path);
+}
+
+fn seek(path: &Path, seconds: f64) {
+    let started = Instant::now();
+    let length = clip::duration(path).expect("duration");
+    let measured = started.elapsed();
+    let started = Instant::now();
+    let mut reader = clip::ClipReader::open_at(path, Duration::from_secs_f64(seconds)).expect("open");
+    let mut samples = Vec::new();
+    reader.next(&mut samples).expect("decode");
+    println!(
+        "{} is {:.1} s long (read in {:.1} ms); opened at {seconds} s and decoded the first packet in {:.0} ms",
+        path.display(),
+        length.as_secs_f64(),
+        measured.as_secs_f64() * 1000.0,
+        started.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 fn verify(path: &Path) {

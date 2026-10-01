@@ -58,7 +58,7 @@ It's a Cargo workspace plus a SvelteKit frontend, like Honk: `core/` (`hindsight
 recording core, `src-tauri/` is the Tauri 2 application built on it (frontend in `src/`, static
 adapter, TypeScript, pnpm), and `spike/` is a command-line measurement tool. The application
 records once its first-run screen is done, lives in the menu bar (tray elsewhere), saves clips,
-and has settings; the clip list is being added. The core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
+has settings, and lists and plays clips. The core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
 ring buffer encrypted with ChaCha20 under a per-run key locked in RAM, and clips saved as Ogg
 Opus.
 
@@ -92,6 +92,7 @@ Opus.
 | List microphones | `cargo run --release -p hindsight-spike -- devices` |
 | Record from the microphone | `cargo run --release -p hindsight-spike -- record 30 180 0.5 [microphone] [fallback]` |
 | Blind listening test of encoder settings | `cargo run --release -p hindsight-spike -- compare 20 [microphone]` |
+| Time opening a clip at a position | `cargo run --release -p hindsight-spike -- seek <clip.opus> <seconds>` |
 
 Before calling a change done, run `pnpm check`, `pnpm build` and `cargo test --workspace`.
 
@@ -101,6 +102,9 @@ Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exist
 
 - **Nothing records before the first-run screen is finished** (`welcomed` in settings), and
   Hindsight never runs twice (`tauri-plugin-single-instance`, registered first). Keep both.
+- **Clips are streamed, never decoded whole** (`core/src/clip.rs`, `ClipReader`; `player.rs`): a
+  three-hour clip decoded at once would be about 2 GB. Window commands that take a clip path go
+  through `clips::clip_in`, so they only ever touch visible `.opus` files in the clips folder.
 - **Settings that could strand the window** go through `settings::reachable`: on macOS the menu
   bar icon and the Dock icon can't both be off.
 - **Launch at login** uses a LaunchAgent (`~/Library/LaunchAgents`) on macOS, not AppleScript,

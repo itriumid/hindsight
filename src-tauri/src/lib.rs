@@ -1,6 +1,7 @@
 //! Hindsight's application: keeps the process's memory out of crash dumps, records from the
 //! moment the first-run screen is done, lives in the menu bar, and saves clips on request.
 
+mod clips;
 mod commands;
 mod data;
 mod hotkeys;
@@ -70,6 +71,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(recording::Recording(Mutex::new(None)))
         .manage(saving::LastClip::default())
+        .manage(clips::Playback::default())
         .manage(data::RemoveOnExit::default())
         .setup(|app| {
             let handle = app.handle();
@@ -112,7 +114,16 @@ pub fn run() {
             commands::set_launch_at_login,
             commands::finish_welcome,
             commands::pick_folder,
-            commands::remove_all_data
+            commands::remove_all_data,
+            clips::list_clips,
+            clips::play_clip,
+            clips::toggle_playback,
+            clips::seek_playback,
+            clips::stop_playback,
+            clips::playback_state,
+            clips::reveal_clip,
+            clips::delete_clip,
+            clips::export_clip
         ])
         .on_window_event(|window, event| {
             // Closing the window keeps Hindsight recording in the menu bar; Quit is in the menu.
@@ -129,6 +140,7 @@ pub fn run() {
             // Stopping the recorder joins its threads: the stream closes and the buffer and its
             // key are wiped before the process ends.
             recording::stop(app);
+            app.state::<clips::Playback>().0.lock().expect("playback").take();
             data::remove_if_asked(app);
         }
     });
