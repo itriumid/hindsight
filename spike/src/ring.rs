@@ -105,9 +105,31 @@ fn lock_region(region: &[u8]) -> Locking {
     }
 }
 
-#[cfg(not(unix))]
+/// Windows only locks pages within the process's minimum working set, so the working set grows
+/// by the region's size first.
+#[cfg(windows)]
+fn lock_region(region: &[u8]) -> Locking {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::Memory::VirtualLock;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
+    };
+    const SLACK: usize = 1 << 20;
+    unsafe {
+        let process = GetCurrentProcess();
+        let (mut minimum, mut maximum) = (0usize, 0usize);
+        if GetProcessWorkingSetSize(process, &mut minimum, &mut maximum) == 0
+            || SetProcessWorkingSetSize(process, minimum + region.len() + SLACK, maximum + region.len() + SLACK) == 0
+            || VirtualLock(region.as_ptr().cast(), region.len()) == 0
+        {
+            return Locking::Refused(GetLastError() as i32);
+        }
+    }
+    Locking::Locked
+}
+
+#[cfg(not(any(unix, windows)))]
 fn lock_region(_region: &[u8]) -> Locking {
-    // Windows needs VirtualLock and a larger working set; measured separately.
     Locking::NotAttempted
 }
 

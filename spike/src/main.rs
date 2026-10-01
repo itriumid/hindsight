@@ -54,9 +54,9 @@ fn encoder() -> Encoder {
     // Hard constant bitrate: every packet is PACKET_BYTES, so the ring is fixed slots.
     encoder.set_vbr(false).expect("constant bitrate");
     encoder.set_signal(Signal::Voice).expect("signal");
-    if let Some(complexity) = setting("HINDSIGHT_COMPLEXITY") {
-        encoder.set_complexity(complexity as u8).expect("complexity");
-    }
+    // Complexity 5: blind tests couldn't tell it from the maximum (10), at less than half the CPU.
+    let complexity = setting("HINDSIGHT_COMPLEXITY").unwrap_or(5);
+    encoder.set_complexity(complexity as u8).expect("complexity");
     encoder
 }
 
@@ -547,6 +547,7 @@ impl SyntheticVoice {
     }
 }
 
+#[cfg(unix)]
 fn cpu_seconds() -> f64 {
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
     unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
@@ -554,6 +555,7 @@ fn cpu_seconds() -> f64 {
     seconds(usage.ru_utime) + seconds(usage.ru_stime)
 }
 
+#[cfg(unix)]
 fn peak_memory_bytes() -> u64 {
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
     unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
@@ -561,6 +563,7 @@ fn peak_memory_bytes() -> u64 {
     if cfg!(target_os = "macos") { usage.ru_maxrss as u64 } else { usage.ru_maxrss as u64 * 1024 }
 }
 
+#[cfg(unix)]
 fn memory_lock_limit() -> String {
     let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
     if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) } != 0 {
@@ -570,4 +573,38 @@ fn memory_lock_limit() -> String {
         if value == libc::RLIM_INFINITY { "unlimited".to_string() } else { format!("{:.1} MB", value as f64 / 1_000_000.0) }
     };
     format!("{} (hard {})", describe(limit.rlim_cur), describe(limit.rlim_max))
+}
+
+#[cfg(windows)]
+fn cpu_seconds() -> f64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let zero = || FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
+    unsafe { GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user) };
+    // FILETIME counts 100-nanosecond intervals.
+    let seconds = |time: FILETIME| ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)) as f64 / 1e7;
+    seconds(kernel) + seconds(user)
+}
+
+#[cfg(windows)]
+fn peak_memory_bytes() -> u64 {
+    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+    counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+    counters.PeakWorkingSetSize as u64
+}
+
+#[cfg(windows)]
+fn memory_lock_limit() -> String {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessWorkingSetSize};
+    let (mut minimum, mut maximum) = (0usize, 0usize);
+    unsafe { GetProcessWorkingSetSize(GetCurrentProcess(), &mut minimum, &mut maximum) };
+    format!(
+        "working set {:.1} to {:.1} MB (locked pages must fit the minimum)",
+        minimum as f64 / 1e6,
+        maximum as f64 / 1e6
+    )
 }
