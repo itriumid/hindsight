@@ -54,7 +54,8 @@ reopened — and skip it otherwise.
 ## This repository
 
 Hindsight keeps a rolling recording of the last few minutes in memory and saves them on request.
-There's no application yet: `spike/` is a Rust command-line measurement tool for the recording
+There's no application yet. It's a Cargo workspace: `core/` (`hindsight-core`) is the recording
+core the application will use, and `spike/` is a command-line measurement tool built on it. The
 core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
 ring buffer encrypted with ChaCha20 under a per-run key locked in RAM, and clips saved as Ogg
 Opus.
@@ -64,9 +65,9 @@ Opus.
 - **Never reuse a nonce.** A packet's nonce is its sequence number under the current key, which
   only grows; `clear()` changes the key before the count restarts. The ring tests check this,
   including one that fails if the slot position is used as the nonce.
-- **Leave no dead files.** Clips are written atomically (`clip::write`: a hidden
-  `.hindsight-partial` file, flushed, then renamed), and `clip::sweep_partials` removes any a
-  crash left. Crash dumps are kept free of memory (`privacy.rs`), using only per-process calls
+- **Leave no dead files.** Clips are written atomically (`core/src/clip.rs`, `write`: a hidden
+  `.hindsight-partial` file, flushed, then renamed), and `sweep_partials` removes any a
+  crash left. Crash dumps are kept free of memory (`core/src/privacy.rs`), using only per-process calls
   that write no setting of their own. Anything else the application stores goes in its data
   folder, where "Remove all Hindsight data" can delete it.
 - **Test recordings of real voices are deleted after use.** Keep them out of the repository;
@@ -74,14 +75,14 @@ Opus.
 
 ### Commands
 
-| What | Command (from `spike/`) |
+| What | Command (from the repository root) |
 |---|---|
-| Build | `cargo build --release` |
-| Unit tests | `cargo test` |
-| Benchmark three hours of synthetic speech | `cargo run --release -- bench 3 180 15` |
-| List microphones | `cargo run --release -- devices` |
-| Record from the microphone | `cargo run --release -- record 30 180 0.5 [microphone] [fallback]` |
-| Blind listening test of encoder settings | `cargo run --release -- compare 20 [microphone]` |
+| Build | `cargo build --release --workspace` |
+| Unit tests | `cargo test --workspace` |
+| Benchmark three hours of synthetic speech | `cargo run --release -p hindsight-spike -- bench 3 180 15` |
+| List microphones | `cargo run --release -p hindsight-spike -- devices` |
+| Record from the microphone | `cargo run --release -p hindsight-spike -- record 30 180 0.5 [microphone] [fallback]` |
+| Blind listening test of encoder settings | `cargo run --release -p hindsight-spike -- compare 20 [microphone]` |
 
 CI (`.github/workflows/spike.yml`) runs the tests and the benchmark on macOS, Linux and Windows,
 Intel and ARM, and posts each system's numbers to the run summary.

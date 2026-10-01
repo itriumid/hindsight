@@ -9,9 +9,9 @@ you save, nothing is written to disk, and nothing ever leaves your computer.
 
 ## Status
 
-**There's no application yet.** This repository holds a measurement spike (`spike/`): the
-recording and saving core, built to answer whether the idea holds up before any interface is
-designed. On macOS it does:
+**There's no application yet.** This repository holds the recording core (`core/`) and a
+measurement spike built on it (`spike/`), made to answer whether the idea holds up before any
+interface is designed. On macOS:
 
 - About 2% of one processor core while recording.
 - A three-hour buffer takes 22 MB, allocated once. It's encrypted in memory with a key made
