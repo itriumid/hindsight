@@ -114,6 +114,7 @@ fn report_buffer(ring: &Ring, odd_sizes: usize) {
     if let Locking::Refused(code) = ring.locked {
         println!("  lock refused: {}", std::io::Error::from_raw_os_error(code));
     }
+    println!("  encrypted with ChaCha20; its key is locked in RAM: {:?}", ring.key_locked);
     println!("  memory lock limit: {}", memory_lock_limit());
     println!("  packets not exactly {PACKET_BYTES} bytes: {odd_sizes}");
     println!("process peak memory: {:.1} MB", peak_memory_bytes() as f64 / 1_000_000.0);

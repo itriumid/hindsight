@@ -14,13 +14,18 @@ recording and saving core, built to answer whether the idea holds up before any 
 designed. On macOS it does:
 
 - About 2% of one processor core while recording.
-- A three-hour buffer takes 22 MB, allocated once and locked in memory, so the system never
-  writes it to swap.
+- A three-hour buffer takes 22 MB, allocated once. It's encrypted in memory with a key made
+  fresh every time Hindsight starts and locked in RAM, so even if the system writes part of the
+  buffer to swap, it only writes scrambled bytes. Where the system allows it (macOS and Windows,
+  and Linux up to its default limit of about an hour), the buffer is locked in RAM as well.
 - Saving the last 15 minutes takes a few milliseconds and makes a 1.9 MB `.opus` file.
 - A microphone that disconnects, goes quiet, or sends only silence is noticed within seconds,
   and recording moves to a fallback microphone.
 
-Windows and Linux are measured next.
+The same benchmark runs on macOS, Linux and Windows (Intel and ARM) on every change.
+
+One thing no application can control: hibernation writes all of memory to disk, locked memory
+included. Turn on your disk's encryption (FileVault, BitLocker, or LUKS) to cover that.
 
 ## Recording people
 
