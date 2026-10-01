@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use opusic_c::{Channels, Decoder, SampleRate};
@@ -16,12 +16,19 @@ const MID_STREAM_PRE_SKIP: u16 = 3840;
 
 const SERIAL: u32 = 0x4869_6e64; // "Hind"
 
+/// Suffix of a clip still being written. A crash can only ever leave one of these behind, never
+/// a half-written clip under its real name, and `sweep_partials` removes them.
+pub const PARTIAL_SUFFIX: &str = ".hindsight-partial";
+
+/// Writes a clip atomically: into a hidden temporary file beside it, flushed to disk, then
+/// renamed into place in one step. The clip exists completely or not at all.
 pub fn write<P: AsRef<[u8]>>(
     path: &Path,
     packets: impl Iterator<Item = P>,
     input_sample_rate: u32,
 ) -> std::io::Result<usize> {
-    let mut writer = PacketWriter::new(BufWriter::new(File::create(path)?));
+    let mut partial = Partial::beside(path);
+    let mut writer = PacketWriter::new(BufWriter::new(File::create(&partial.path)?));
     writer.write_packet(opus_head(input_sample_rate).to_vec(), SERIAL, PacketWriteEndInfo::EndPage, 0)?;
     writer.write_packet(opus_tags(), SERIAL, PacketWriteEndInfo::EndPage, 0)?;
 
@@ -38,8 +45,62 @@ pub fn write<P: AsRef<[u8]>>(
         };
         writer.write_packet(packet.as_ref().to_vec(), SERIAL, end, granule)?;
     }
-    writer.inner_mut().flush()?;
+    let file = writer.into_inner().into_inner().map_err(|error| error.into_error())?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&partial.path, path)?;
+    partial.committed = true;
+    sync_directory(path);
     Ok(packets.len())
+}
+
+/// Deletes clips a crash left half-written in `directory`; returns how many.
+pub fn sweep_partials(directory: &Path) -> std::io::Result<usize> {
+    let mut removed = 0;
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        let is_partial = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.ends_with(PARTIAL_SUFFIX));
+        if is_partial && path.is_file() {
+            std::fs::remove_file(&path)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// The temporary file behind a clip being written, deleted if the write doesn't finish, even
+/// when it ends in a panic.
+struct Partial {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl Partial {
+    fn beside(path: &Path) -> Self {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("clip");
+        let directory = path.parent().unwrap_or(Path::new("."));
+        Partial { path: directory.join(format!(".{name}{PARTIAL_SUFFIX}")), committed: false }
+    }
+}
+
+impl Drop for Partial {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Makes the rename itself durable on Unix; Windows has no directory handle to flush.
+fn sync_directory(path: &Path) {
+    #[cfg(unix)]
+    if let Some(directory) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Ok(handle) = File::open(directory) {
+            let _ = handle.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn opus_head(input_sample_rate: u32) -> [u8; 19] {
@@ -118,4 +179,66 @@ pub fn write_wav(path: &Path, samples: &[f32]) -> std::io::Result<()> {
         out.write_all(&value.to_le_bytes())?;
     }
     out.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("hindsight-test-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn names(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_finished_write_leaves_only_the_clip() {
+        let directory = scratch("finished");
+        let path = directory.join("clip.opus");
+        let mut encoder = opusic_c::Encoder::new(Channels::Mono, SampleRate::Hz48000, opusic_c::Application::Voip).unwrap();
+        let silence = [0f32; SAMPLES_PER_PACKET as usize];
+        let packets: Vec<Vec<u8>> = (0..2)
+            .map(|_| {
+                let mut packet = vec![0u8; 256];
+                let size = encoder.encode_float_to_slice(&silence, &mut packet).unwrap();
+                packet.truncate(size);
+                packet
+            })
+            .collect();
+        write(&path, packets.into_iter(), 48_000).unwrap();
+        assert_eq!(names(&directory), vec!["clip.opus"]);
+        assert_eq!(decode(&path).unwrap().packets, 2);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_write_that_panics_leaves_nothing() {
+        let directory = scratch("panic");
+        let path = directory.join("clip.opus");
+        let packets = (0..10).map(|index| if index == 3 { panic!("interrupted") } else { [0u8; 40] });
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write(&path, packets, 48_000)));
+        assert!(result.is_err());
+        assert!(names(&directory).is_empty(), "left behind: {:?}", names(&directory));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn sweeping_removes_only_half_written_clips() {
+        let directory = scratch("sweep");
+        std::fs::write(directory.join("kept.opus"), b"a saved clip").unwrap();
+        std::fs::write(directory.join(format!(".lost.opus{PARTIAL_SUFFIX}")), b"half").unwrap();
+        assert_eq!(sweep_partials(&directory).unwrap(), 1);
+        assert_eq!(names(&directory), vec!["kept.opus"]);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

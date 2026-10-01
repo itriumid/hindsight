@@ -17,6 +17,7 @@
 //! Nothing here is the application; it's measurements to decide the application's design.
 
 mod clip;
+mod privacy;
 mod ring;
 
 use std::path::{Path, PathBuf};
@@ -34,6 +35,13 @@ const FRAME: usize = 960; // 20 ms at 48 kHz
 const PACKET_BYTES: usize = (BITRATE as f64 * PACKET_SECONDS / 8.0) as usize; // 40
 
 fn main() {
+    let hardened = privacy::keep_memory_out_of_crash_dumps();
+    println!("process: {}", if hardened.is_empty() { "crash dumps NOT restricted".to_string() } else { hardened.join(", ") });
+    match clip::sweep_partials(Path::new(".")) {
+        Ok(0) => {}
+        Ok(removed) => println!("removed {removed} half-written clip(s) left by a crash"),
+        Err(error) => eprintln!("couldn't check for half-written clips: {error}"),
+    }
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let number = |index: usize, default: f64| {
         arguments.get(index).and_then(|value| value.parse().ok()).unwrap_or(default)
