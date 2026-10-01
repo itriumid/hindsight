@@ -15,7 +15,14 @@
     | { kind: "lost"; microphone: string; role: string; reason: string }
     | { kind: "waiting"; retryInSeconds: number };
 
+  interface Saved {
+    path: string;
+    fileName: string;
+    seconds: number;
+  }
+
   let status = $state<Status | null>(null);
+  let folder = $state<string | null>(null);
   let waiting = $state<number | null>(null);
   let history = $state<{ at: Date; text: string }[]>([]);
 
@@ -42,6 +49,14 @@
     return `${rest} s`;
   }
 
+  async function chooseFolder() {
+    folder = await invoke<string | null>("choose_clips_folder");
+  }
+
+  function save(minutes: number) {
+    invoke("save_last", { minutes });
+  }
+
   async function refresh() {
     status = await invoke<Status>("recorder_status");
     if (status.microphone) waiting = null;
@@ -49,7 +64,12 @@
 
   onMount(() => {
     refresh();
+    invoke<string | null>("clips_folder").then((value) => (folder = value));
     const timer = setInterval(refresh, 1000);
+    const stopSaved = listen<Saved>("saved", ({ payload }) => {
+      history = [{ at: new Date(), text: `Saved ${payload.fileName}` }, ...history].slice(0, 6);
+      invoke<string | null>("clips_folder").then((value) => (folder = value));
+    });
     const stop = listen<Notice>("recorder", ({ payload }) => {
       waiting = payload.kind === "waiting" ? payload.retryInSeconds : null;
       history = [{ at: new Date(), text: describe(payload) }, ...history].slice(0, 6);
@@ -58,6 +78,7 @@
     return () => {
       clearInterval(timer);
       stop.then((unlisten) => unlisten());
+      stopSaved.then((unlisten) => unlisten());
     };
   });
 </script>
@@ -106,7 +127,31 @@
     </section>
   {/if}
 
-  <p class="note">Saving clips arrives in the next update.</p>
+  <section class="save">
+    <h2>Save</h2>
+    <div class="buttons">
+      <button onclick={() => save(1)}>Last minute</button>
+      <button onclick={() => save(5)}>Last 5 minutes</button>
+      <button class="primary" onclick={() => save(15)}>Last 15 minutes</button>
+    </div>
+    <p class="hint">Or from the menu bar icon, without opening this window.</p>
+  </section>
+
+  <section class="folder">
+    <h2>Clips folder</h2>
+    {#if folder}
+      <p class="path" title={folder}>{folder}</p>
+      <div class="buttons">
+        <button onclick={chooseFolder}>Change…</button>
+        <button onclick={() => invoke("reveal_clips_folder")}>Show</button>
+      </div>
+    {:else}
+      <p class="hint">Not chosen yet. Hindsight asks the first time you save.</p>
+      <div class="buttons">
+        <button onclick={chooseFolder}>Choose now…</button>
+      </div>
+    {/if}
+  </section>
 </main>
 
 <style>
@@ -154,9 +199,48 @@
     outline: 1px solid var(--accent-edge);
   }
 
-  .hint,
-  .note {
+  .hint {
     color: var(--muted);
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  button {
+    padding: var(--space-1) var(--space-3);
+    background: var(--elevated);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font: inherit;
+  }
+
+  button:hover {
+    border-color: var(--accent-edge);
+  }
+
+  button.primary {
+    background: var(--accent);
+    color: var(--on-accent);
+    border-color: transparent;
+  }
+
+  .save,
+  .folder {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .path {
+    overflow: hidden;
+    color: var(--text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: text;
   }
 
   .buffer {

@@ -9,8 +9,8 @@ you save, nothing is written to disk, and nothing ever leaves your computer.
 
 ## Status
 
-**The application is early**: it records from the moment it starts and shows what it's doing, and
-saving, the menu bar and settings are being built now. The recording core (`core/`) underneath it is done and measured, through a
+**The application is early**: it records from the moment it starts, lives in the menu bar, and
+saves the last 1, 5 or 15 minutes as a clip. Settings and a clip list are being built now. The recording core (`core/`) underneath it is done and measured, through a
 spike (`spike/`) made to answer whether the idea holds up before any interface was designed.
 On macOS:
 

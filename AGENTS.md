@@ -57,8 +57,8 @@ Hindsight keeps a rolling recording of the last few minutes in memory and saves 
 It's a Cargo workspace plus a SvelteKit frontend, like Honk: `core/` (`hindsight-core`) is the
 recording core, `src-tauri/` is the Tauri 2 application built on it (frontend in `src/`, static
 adapter, TypeScript, pnpm), and `spike/` is a command-line measurement tool. The application
-records from launch and shows its status; the menu bar, saving and settings are being added. The
-core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
+records from launch, lives in the menu bar (tray elsewhere) and saves clips; settings and the clip
+list are being added. The core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
 ring buffer encrypted with ChaCha20 under a per-run key locked in RAM, and clips saved as Ogg
 Opus.
 
@@ -98,6 +98,16 @@ Before calling a change done, run `pnpm check`, `pnpm build` and `cargo test --w
 CI: `build.yml` builds, tests and bundles the application for six targets (macOS universal,
 Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exists;
 `spike.yml` runs the core's tests and the benchmark on every system and posts the numbers.
+
+- **The menu bar glyph** is `branding/tray-template.svg`, rendered to
+  `src-tauri/icons/tray-template@2x.png` at 44 by 44 (black on transparent; macOS tints it).
+  The app icon is `branding/icon.svg`, rendered with `pnpm tauri icon`.
+- **macOS microphone:** the app needs `src-tauri/Entitlements.plist`
+  (`com.apple.security.device.audio-input`) because Tauri signs with the hardened runtime;
+  without it macOS refuses the microphone silently. `pnpm tauri dev` never shows the permission
+  prompt (the terminal is the responsible app), so test permissions with the bundled app:
+  `pnpm tauri build --debug --bundles app`, then `open target/debug/bundle/macos/Hindsight.app`.
+  `tccutil reset Microphone id.itrium.hindsight` resets the decision.
 
 ### Environment gotchas
 
