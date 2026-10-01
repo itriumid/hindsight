@@ -54,9 +54,9 @@ fn encoder() -> Encoder {
     // Hard constant bitrate: every packet is PACKET_BYTES, so the ring is fixed slots.
     encoder.set_vbr(false).expect("constant bitrate");
     encoder.set_signal(Signal::Voice).expect("signal");
-    if let Some(complexity) = setting("HINDSIGHT_COMPLEXITY") {
-        encoder.set_complexity(complexity as u8).expect("complexity");
-    }
+    // Complexity 5: blind tests couldn't tell it from the maximum (10), at less than half the CPU.
+    let complexity = setting("HINDSIGHT_COMPLEXITY").unwrap_or(5);
+    encoder.set_complexity(complexity as u8).expect("complexity");
     encoder
 }
 
