@@ -1,0 +1,79 @@
+name: Spike
+
+# Builds and tests the recording spike on every desktop system Hindsight targets, then runs its
+# three-hour benchmark: CPU per hour of audio, buffer memory, and whether the operating system
+# lets the buffer be locked in RAM. The numbers land in each run's summary. Runners have no
+# microphone, so live recording isn't covered here.
+
+on:
+  pull_request:
+    paths:
+      - "spike/**"
+      - ".github/workflows/spike.yml"
+  push:
+    branches: [main]
+    paths:
+      - "spike/**"
+      - ".github/workflows/spike.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Windows runners default to PowerShell; Bash (Git Bash on Windows) keeps every step the same
+# and fails on a command's exit code.
+defaults:
+  run:
+    shell: bash
+    working-directory: spike
+
+jobs:
+  measure:
+    name: Measure (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-latest
+          - name: Linux
+            runner: ubuntu-24.04
+          - name: Linux, ARM
+            runner: ubuntu-24.04-arm
+          - name: Windows
+            runner: windows-latest
+          - name: Windows, ARM
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      # cpal talks to ALSA on Linux.
+      - name: Install Linux audio headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: spike
+          key: ${{ matrix.runner }}
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Benchmark three hours of synthetic speech
+        run: |
+          cargo run --release --locked -- bench 3 180 15 | tee benchmark.txt
+          {
+            echo "### ${{ matrix.name }}"
+            echo
+            echo '```'
+            cat benchmark.txt
+            if [ "$RUNNER_OS" != "Windows" ]; then
+              echo "ulimit -l: $(ulimit -l)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -q "^verified:" benchmark.txt

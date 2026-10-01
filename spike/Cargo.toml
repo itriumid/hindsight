@@ -5,6 +5,17 @@ edition = "2024"
 
 [dependencies]
 cpal = "0.18"
-libc = "0.2"
 ogg = "0.9"
 opusic-c = "1.6"
+
+# Memory locking, CPU time and peak memory come from the operating system directly.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Memory",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }
