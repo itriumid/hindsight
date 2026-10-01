@@ -14,25 +14,18 @@
 //!                                                     a listening test
 //!   verify  <clip.opus>                               decode a clip and write a WAV beside it
 //!
-//! Nothing here is the application; it's measurements to decide the application's design.
-
-mod clip;
-mod privacy;
-mod ring;
+//! Nothing here is the application; it's measurements to decide the application's design. The
+//! recording itself lives in `hindsight-core`, which the application uses too.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use opusic_c::{Application, Bitrate, Channels, Encoder, SampleRate, Signal};
-use ring::{Locking, Ring};
-
-const BITRATE: u32 = 16_000;
-const PACKET_SECONDS: f64 = 0.02;
-const FRAME: usize = 960; // 20 ms at 48 kHz
-const PACKET_BYTES: usize = (BITRATE as f64 * PACKET_SECONDS / 8.0) as usize; // 40
+use cpal::traits::{DeviceTrait, HostTrait};
+use hindsight_core::capture::{Audio, Heartbeat, Resampler, Role, choose_device, device_name, find_device, open_stream};
+use hindsight_core::encoding::{DEFAULT_COMPLEXITY, FRAME, PACKET_BYTES, PACKET_SECONDS, ring_for};
+use hindsight_core::ring::{Locking, Ring};
+use hindsight_core::{clip, privacy};
 
 fn main() {
     let hardened = privacy::keep_memory_out_of_crash_dumps();
@@ -56,18 +49,6 @@ fn main() {
     }
 }
 
-fn encoder() -> Encoder {
-    let mut encoder = Encoder::new(Channels::Mono, SampleRate::Hz48000, Application::Voip).expect("encoder");
-    encoder.set_bitrate(Bitrate::Value(BITRATE)).expect("bitrate");
-    // Hard constant bitrate: every packet is PACKET_BYTES, so the ring is fixed slots.
-    encoder.set_vbr(false).expect("constant bitrate");
-    encoder.set_signal(Signal::Voice).expect("signal");
-    // Complexity 5: blind tests couldn't tell it from the maximum (10), at less than half the CPU.
-    let complexity = setting("HINDSIGHT_COMPLEXITY").unwrap_or(5);
-    encoder.set_complexity(complexity as u8).expect("complexity");
-    encoder
-}
-
 /// Experiments are switched with environment variables, so commands stay the same:
 /// HINDSIGHT_COMPLEXITY (0-10), HINDSIGHT_BUFFER_FRAMES (microphone wake-up size),
 /// HINDSIGHT_SKIP_ENCODE=1 (capture only).
@@ -75,11 +56,16 @@ fn setting(name: &str) -> Option<u32> {
     std::env::var(name).ok().and_then(|value| value.parse().ok())
 }
 
-fn ring_for(buffer_minutes: f64) -> Ring {
-    let capacity = (buffer_minutes * 60.0 / PACKET_SECONDS).round() as usize;
-    let mut ring = Ring::new(capacity, PACKET_BYTES);
-    ring.lock();
-    ring
+fn encoder() -> hindsight_core::encoding::Encoder {
+    hindsight_core::encoding::encoder(setting("HINDSIGHT_COMPLEXITY").map_or(DEFAULT_COMPLEXITY, |value| value as u8))
+}
+
+fn stream(device: &cpal::Device, audio: mpsc::Sender<Audio>, lost: mpsc::Sender<String>, heartbeat: Heartbeat) -> Result<cpal::Stream, String> {
+    let frames = setting("HINDSIGHT_BUFFER_FRAMES");
+    if let Some(frames) = frames {
+        println!("  asking for {frames}-frame wake-ups");
+    }
+    open_stream(device, audio, lost, heartbeat, frames)
 }
 
 fn bench(hours: f64, buffer_minutes: f64, save_minutes: f64) {
@@ -164,10 +150,6 @@ fn verify(path: &Path) {
     }
 }
 
-fn device_name(device: &cpal::Device) -> String {
-    device.description().map(|description| description.name().to_string()).unwrap_or_else(|_| "(unnamed)".into())
-}
-
 fn devices() {
     let host = cpal::default_host();
     let default = host.default_input_device().map(|device| device_name(&device));
@@ -181,120 +163,6 @@ fn devices() {
         println!("{marker} {name}  ({config})");
     }
     println!("* = system default");
-}
-
-/// The first microphone whose name contains `wanted`, ignoring case.
-fn find_device(host: &cpal::Host, wanted: &str) -> Option<cpal::Device> {
-    let wanted = wanted.to_lowercase();
-    host.input_devices().ok()?.find(|device| device_name(device).to_lowercase().contains(&wanted))
-}
-
-/// The microphone to use now: the chosen one, else the fallback, else the system default.
-fn choose_device(host: &cpal::Host, primary: Option<&String>, fallback: Option<&String>) -> Option<(cpal::Device, Role)> {
-    if let Some(device) = primary.and_then(|name| find_device(host, name)) {
-        return Some((device, Role::Primary));
-    }
-    if let Some(device) = fallback.and_then(|name| find_device(host, name)) {
-        return Some((device, Role::Fallback));
-    }
-    host.default_input_device().map(|device| (device, Role::SystemDefault))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Role {
-    Primary,
-    Fallback,
-    SystemDefault,
-}
-
-/// What the encoding thread is sent.
-enum Audio {
-    Samples { rate: u32, samples: Vec<f32> },
-    /// Time no microphone was recording, kept as silence so a clip's timeline matches real time.
-    Gap(Duration),
-}
-
-/// Milliseconds since `epoch` at which audio last arrived, for the watchdog.
-#[derive(Clone)]
-struct Heartbeat {
-    epoch: Instant,
-    last: Arc<AtomicU64>,
-    /// When a sample that wasn't exactly zero last arrived. A live microphone always has some
-    /// noise floor, so a stream of perfect zeros is dead even though it keeps delivering.
-    last_sound: Arc<AtomicU64>,
-}
-
-impl Heartbeat {
-    fn new() -> Self {
-        Heartbeat { epoch: Instant::now(), last: Arc::new(AtomicU64::new(0)), last_sound: Arc::new(AtomicU64::new(0)) }
-    }
-    fn beat(&self) {
-        self.last.store(self.epoch.elapsed().as_millis() as u64, Ordering::Relaxed);
-    }
-    fn heard(&self, samples: &[f32]) {
-        if samples.iter().any(|&sample| sample != 0.0) {
-            self.last_sound.store(self.epoch.elapsed().as_millis() as u64, Ordering::Relaxed);
-        }
-    }
-    fn digital_silence_for(&self) -> Duration {
-        Duration::from_millis(self.epoch.elapsed().as_millis() as u64 - self.last_sound.load(Ordering::Relaxed))
-    }
-    fn silent_for(&self) -> Duration {
-        Duration::from_millis(self.epoch.elapsed().as_millis() as u64 - self.last.load(Ordering::Relaxed))
-    }
-}
-
-fn open_stream(
-    device: &cpal::Device,
-    audio: mpsc::Sender<Audio>,
-    lost: mpsc::Sender<()>,
-    heartbeat: Heartbeat,
-) -> Result<cpal::Stream, String> {
-    let config = device.default_input_config().map_err(|error| error.to_string())?;
-    let rate = config.sample_rate();
-    let channels = config.channels() as usize;
-    let mut stream_config: cpal::StreamConfig = config.clone().into();
-    if let Some(frames) = setting("HINDSIGHT_BUFFER_FRAMES") {
-        if let cpal::SupportedBufferSize::Range { min, max } = config.buffer_size() {
-            stream_config.buffer_size = cpal::BufferSize::Fixed(frames.clamp(*min, *max));
-            println!("  buffer: {} frames (device allows {min} to {max})", frames.clamp(*min, *max));
-        }
-    }
-    let on_error = move |error: cpal::Error| {
-        eprintln!("  stream error: {error}");
-        let _ = lost.send(());
-    };
-    let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            stream_config,
-            {
-                let heartbeat = heartbeat.clone();
-                move |data: &[f32], _: &_| {
-                    heartbeat.beat();
-                    let samples = downmix(data, channels, |sample| sample);
-                    heartbeat.heard(&samples);
-                    let _ = audio.send(Audio::Samples { rate, samples });
-                }
-            },
-            on_error,
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            stream_config,
-            move |data: &[i16], _: &_| {
-                heartbeat.beat();
-                let samples = downmix(data, channels, |sample| sample as f32 / i16::MAX as f32);
-                heartbeat.heard(&samples);
-                let _ = audio.send(Audio::Samples { rate, samples });
-            },
-            on_error,
-            None,
-        ),
-        other => return Err(format!("unsupported sample format {other:?}")),
-    }
-    .map_err(|error| error.to_string())?;
-    stream.play().map_err(|error| error.to_string())?;
-    Ok(stream)
 }
 
 fn record(seconds: f64, buffer_minutes: f64, save_minutes: f64, primary: Option<&String>, fallback: Option<&String>) {
@@ -347,7 +215,7 @@ fn record(seconds: f64, buffer_minutes: f64, save_minutes: f64, primary: Option<
     let cpu_before = cpu_seconds();
     let started = Instant::now();
     let deadline = started + Duration::from_secs_f64(seconds);
-    let (lost_sender, lost_receiver) = mpsc::channel::<()>();
+    let (lost_sender, lost_receiver) = mpsc::channel::<String>();
     let mut current: Option<(cpal::Stream, Role, String)> = None;
     let mut silent_since: Option<Instant> = Some(started);
     let mut last_check = Instant::now();
@@ -387,7 +255,7 @@ fn record(seconds: f64, buffer_minutes: f64, save_minutes: f64, primary: Option<
                 let fresh = Heartbeat::new();
                 fresh.beat(); // the clock starts at opening, so a stream that never delivers counts
                 fresh.heard(&[1.0]);
-                match open_stream(&device, audio_sender.clone(), lost_sender.clone(), fresh.clone()) {
+                match stream(&device, audio_sender.clone(), lost_sender.clone(), fresh.clone()) {
                     Ok(stream) => {
                         heartbeat = fresh;
                         if let Some(since) = silent_since.take() {
@@ -406,7 +274,13 @@ fn record(seconds: f64, buffer_minutes: f64, save_minutes: f64, primary: Option<
             last_check = Instant::now();
         }
         // A lost stream: drop it now, so the next pass opens the fallback.
-        let reported = lost_receiver.recv_timeout(Duration::from_millis(100)).is_ok();
+        let reported = match lost_receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(reason) => {
+                eprintln!("  stream error: {reason}");
+                true
+            }
+            Err(_) => false,
+        };
         let starved = current.is_some() && heartbeat.silent_for() > watchdog;
         let dead = current.is_some() && heartbeat.digital_silence_for() > Duration::from_secs(3);
         if starved {
@@ -451,8 +325,8 @@ fn compare(seconds: f64, microphone: Option<&String>) {
     let (device, role) = choose_device(&host, microphone, None).expect("no microphone found");
     println!("== compare: {seconds} s from {} ({role:?}). Speak now.", device_name(&device));
     let (audio_sender, audio_receiver) = mpsc::channel::<Audio>();
-    let (lost_sender, _lost_receiver) = mpsc::channel::<()>();
-    let stream = open_stream(&device, audio_sender, lost_sender, Heartbeat::new()).expect("couldn't open the microphone");
+    let (lost_sender, _lost_receiver) = mpsc::channel::<String>();
+    let stream = stream(&device, audio_sender, lost_sender, Heartbeat::new()).expect("couldn't open the microphone");
     std::thread::sleep(Duration::from_secs_f64(seconds));
     drop(stream);
 
@@ -486,45 +360,6 @@ fn compare(seconds: f64, microphone: Option<&String>) {
             cpu / (raw.len() as f64 / 48_000.0) * 100.0,
             path.with_extension("wav").display()
         );
-    }
-}
-
-fn downmix<T: Copy>(data: &[T], channels: usize, to_float: impl Fn(T) -> f32) -> Vec<f32> {
-    data.chunks(channels)
-        .map(|frame| frame.iter().map(|&sample| to_float(sample)).sum::<f32>() / channels as f32)
-        .collect()
-}
-
-/// Linear interpolation; good enough to measure with, not to ship.
-struct Resampler {
-    step: f64,
-    position: f64,
-    previous: f32,
-}
-
-impl Resampler {
-    fn new(from: u32, to: u32) -> Self {
-        Resampler { step: from as f64 / to as f64, position: 0.0, previous: 0.0 }
-    }
-
-    fn push(&mut self, input: &[f32], output: &mut Vec<f32>) {
-        if (self.step - 1.0).abs() < f64::EPSILON {
-            output.extend_from_slice(input);
-            return;
-        }
-        // position runs from -1 (the previous chunk's last sample) through the new samples.
-        while self.position < input.len() as f64 - 1.0 {
-            let index = self.position.floor();
-            let fraction = (self.position - index) as f32;
-            let left = if index < 0.0 { self.previous } else { input[index as usize] };
-            let right = input[(index + 1.0) as usize];
-            output.push(left + (right - left) * fraction);
-            self.position += self.step;
-        }
-        self.position -= input.len() as f64;
-        if let Some(&last) = input.last() {
-            self.previous = last;
-        }
     }
 }
 

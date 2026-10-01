@@ -1,6 +1,6 @@
 name: Spike
 
-# Builds and tests the recording spike on every desktop system Hindsight targets, then runs its
+# Builds and tests the recording core and spike on every desktop system Hindsight targets, then runs its
 # three-hour benchmark: CPU per hour of audio, buffer memory, and whether the operating system
 # lets the buffer be locked in RAM. The numbers land in each run's summary. Runners have no
 # microphone, so live recording isn't covered here.
@@ -8,12 +8,18 @@ name: Spike
 on:
   pull_request:
     paths:
+      - "core/**"
       - "spike/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/spike.yml"
   push:
     branches: [main]
     paths:
+      - "core/**"
       - "spike/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/spike.yml"
   workflow_dispatch:
 
@@ -25,7 +31,6 @@ permissions:
 defaults:
   run:
     shell: bash
-    working-directory: spike
 
 jobs:
   measure:
@@ -57,15 +62,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: spike
           key: ${{ matrix.runner }}
 
       - name: Test
-        run: cargo test --release --locked
+        run: cargo test --release --locked --workspace
 
       - name: Benchmark three hours of synthetic speech
         run: |
-          cargo run --release --locked -- bench 3 180 15 | tee benchmark.txt
+          cargo run --release --locked -p hindsight-spike -- bench 3 180 15 | tee benchmark.txt
           {
             echo "### ${{ matrix.name }}"
             echo
