@@ -1,0 +1,139 @@
+name: Pull Request Checks
+
+# Checks everything derivable from a pull request's own metadata. Both jobs are required status
+# checks in the ruleset applied by the handbook's scripts/configure-repository.sh, so they run on
+# every push (`synchronize`) as well as on open — a required check attaches to a commit, and a new
+# head commit without one would block the merge. See the handbook's
+# conventions/background/git-workflow.md.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+
+# Any `permissions:` block replaces the default token scopes, so grant per job.
+permissions: {}
+
+jobs:
+  branch-name:
+    name: Branch name
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check the branch name against the convention
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Read the head ref from the API rather than context.payload. Renaming a branch
+            // retargets its open pull requests but fires no webhook, so re-running this
+            // workflow is the only way to clear a red check — and a re-run replays the
+            // original payload, in which head.ref is still the old name.
+            const { data: freshPullRequest } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: pr.number,
+            });
+            const branch = freshPullRequest.head.ref;
+
+            // <type>/[<issue>-]<slug>: an issue number, a slug, or both — never neither.
+            const pattern = /^(feature|enhancement|fix|chore)\/[a-z0-9]+(-[a-z0-9]+)*$/;
+            const exempt =
+              branch === 'main' || /^revert-\d+-/.test(branch) || /^dependabot\//.test(branch);
+            const passes = exempt || pattern.test(branch);
+
+            const marker = '<!-- branch-name-check -->';
+            const convention = '`<feature|enhancement|fix|chore>/[<issue>-]<slug>`';
+            const rules =
+              'https://github.com/itriumid/agent-handbook/blob/main/conventions/rules/branching.md';
+            const body = exempt
+              ? `${marker}\n✅ \`${branch}\` is the mainline, a revert or a dependabot branch — exempt from the naming convention.`
+              : passes
+                ? `${marker}\n✅ Branch name \`${branch}\` follows the convention: ${convention}.`
+                : `${marker}\n❌ Branch name \`${branch}\` doesn't match the convention ${convention}.\n\nThe issue number is optional and bare digits — \`fix/31\`, \`fix/null-cart-total\` and \`fix/31-null-cart-total\` are all fine. Lowercase kebab-case only.\n\nSee [the branching rules](${rules}). Rename the branch, then re-run this workflow — it reads the head ref live, so the check clears on the re-run.`;
+
+            // Paginated: a first-page-only lookup would miss the marker on a long thread and
+            // post a duplicate.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body.includes(marker));
+
+            if (existing) {
+              if (existing.body !== body) {
+                await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+              }
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number, body });
+            }
+
+            if (!passes) {
+              core.setFailed(`Branch name "${branch}" doesn't match the naming convention.`);
+            }
+
+  commit-messages:
+    name: Commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check commits, title and description for self-attribution
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // Enforces "No self-attribution" from the handbook's conventions/rules/ai-agents.md.
+            // The pull request title and description are checked too: they become the merge
+            // commit's subject and body.
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              ...context.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            // Filenames a tool dictates are not attribution; strip them before matching.
+            const allowedFilenames = /\b(CLAUDE|AGENTS|GEMINI)\.md\b/gi;
+            const vendors = /\b(claude|anthropic|openai|chatgpt|gpt-?\d|copilot|gemini|windsurf)\b/i;
+            const attribution = [
+              { pattern: /^co-authored-by:.*(\[bot\]|noreply@(anthropic|openai)\.com)/im, reason: 'a bot co-author trailer' },
+              { pattern: /\bgenerated with/i, reason: '"generated with"' },
+              { pattern: /🤖/u, reason: 'a robot emoji' },
+            ];
+
+            const findings = [];
+            const inspect = (where, text) => {
+              const cleaned = (text || '').replace(allowedFilenames, '');
+              const vendor = cleaned.match(vendors);
+              if (vendor) findings.push(`${where}: mentions "${vendor[0]}"`);
+              for (const { pattern, reason } of attribution) {
+                if (pattern.test(cleaned)) findings.push(`${where}: contains ${reason}`);
+              }
+            };
+
+            inspect('Pull request title', pr.title);
+            inspect('Pull request description', pr.body);
+            for (const commit of commits) {
+              // Dependabot writes its own messages; they aren't agent output.
+              if (commit.author?.login === 'dependabot[bot]') continue;
+              inspect(`Commit ${commit.sha.slice(0, 7)}`, commit.commit.message);
+            }
+
+            if (findings.length) {
+              core.setFailed(
+                [
+                  'Found tool or vendor attribution, which the handbook forbids in anything kept:',
+                  ...findings.map((finding) => `  - ${finding}`),
+                  'Reword the commit (rebase, then push with --force-with-lease) or edit the pull request text, then re-run.',
+                  'Rules: https://github.com/itriumid/agent-handbook/blob/main/conventions/rules/ai-agents.md',
+                ].join('\n'),
+              );
+            } else {
+              core.info(`Checked the title, description and ${commits.length} commit(s): no attribution found.`);
+            }

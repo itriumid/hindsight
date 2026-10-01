@@ -1,0 +1,97 @@
+name: Sync Labels
+
+# Manual only: this deletes every label not in the standard set and provisions that set from
+# the handbook's conventions/reference/labels.md, "Code repositories". Not something that should fire on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List planned changes without creating/updating/deleting anything'
+        type: boolean
+        default: false
+
+# Any `permissions:` block replaces the default token scopes, so grant per job.
+permissions: {}
+
+jobs:
+  sync-labels:
+    name: Sync labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Remove non-standard labels, apply standard set
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          script: |
+            // Source of truth: the handbook's conventions/reference/labels.md, "Code repositories". Palette is Catppuccin Mocha
+            // (https://catppuccin.com/palette), except the status: labels, which use the brand
+            // colors: graphite and pastel pink.
+            //
+            // Descriptions are capped at 100 characters — the API rejects anything longer with a
+            // 422, and this job creates and updates in one pass, so one long description fails
+            // the label it belongs to.
+            const STANDARD_LABELS = [
+              { name: 'type: feature', color: 'a6e3a1', description: 'A capability that did not exist before' },
+              { name: 'type: enhancement', color: '94e2d5', description: 'A capability that existed, now better' },
+              { name: 'type: bug', color: 'f38ba8', description: 'Something was broken. Matches the fix/ branch prefix.' },
+              { name: 'type: chore', color: 'fab387', description: 'Deps, tooling, config, docs, refactors, tests. Excluded from release notes.' },
+              { name: 'status: blocked', color: '2B2B2B', description: 'Work is done but waiting on something external' },
+              { name: 'status: do-not-merge', color: 'FEBFCA', description: 'Deliberately not merging — spike, discussion, or ordering dependency' },
+            ];
+
+            const dryRun = process.env.DRY_RUN === 'true';
+            const existing = await github.paginate(github.rest.issues.listLabelsForRepo, {
+              ...context.repo,
+              per_page: 100,
+            });
+            const byLowerName = new Map(existing.map((label) => [label.name.toLowerCase(), label]));
+            const standardLowerNames = new Set(STANDARD_LABELS.map((label) => label.name.toLowerCase()));
+
+            core.info(dryRun ? '--- DRY RUN: no changes will be made ---' : '--- Syncing labels ---');
+
+            // Wipe every label that isn't one of ours. Labels already matching a standard name are
+            // reconciled in place below instead, so their existing issue and pull request
+            // associations survive.
+            for (const label of existing) {
+              if (standardLowerNames.has(label.name.toLowerCase())) continue;
+              core.info(`Delete: ${label.name}`);
+              if (!dryRun) {
+                await github.rest.issues.deleteLabel({ ...context.repo, name: label.name });
+              }
+            }
+
+            for (const target of STANDARD_LABELS) {
+              const label = byLowerName.get(target.name.toLowerCase());
+              if (!label) {
+                core.info(`Create: ${target.name}`);
+                if (!dryRun) {
+                  await github.rest.issues.createLabel({ ...context.repo, ...target });
+                }
+                continue;
+              }
+
+              // Renaming (e.g. casing) preserves the label on existing issues and pull requests;
+              // deleting and recreating would silently drop it from anything already labeled.
+              const needsUpdate =
+                label.name !== target.name ||
+                label.color.toLowerCase() !== target.color.toLowerCase() ||
+                (label.description || '') !== target.description;
+              if (needsUpdate) {
+                core.info(`Update: ${label.name} -> ${target.name}`);
+                if (!dryRun) {
+                  await github.rest.issues.updateLabel({
+                    ...context.repo,
+                    name: label.name,
+                    new_name: target.name,
+                    color: target.color,
+                    description: target.description,
+                  });
+                }
+              } else {
+                core.info(`Unchanged: ${target.name}`);
+              }
+            }

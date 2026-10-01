@@ -1,0 +1,3 @@
+# Blank issues stay available on purpose. Technical debt is what the form is shaped around, but
+# the odd issue that fits no form shouldn't have to be forced through one.
+blank_issues_enabled: true

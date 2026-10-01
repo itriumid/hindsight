@@ -1,0 +1,61 @@
+# Deliberately carries no `labels:` — label-sync.yml deletes every label outside the standard
+# set in the handbook's conventions/reference/labels.md, so a default here would vanish the next
+# time it runs. Add the label there first if this form should apply one.
+name: Technical debt
+description: Tech debt, tooling, dependencies, or a code-level known issue.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Once this issue exists, the branch that fixes it is `chore/<number>-<slug>` (either part
+        alone is fine too), and its pull request body needs the literal `Closes #<number>` —
+        that string is what closes this issue on merge.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      description: This form is shaped for tech debt; the other options are here so nothing needs a second form.
+      options:
+        - Tech debt — works today, but costs something to live with
+        - Tooling, CI, or dependencies
+        - Code-level known issue — wrong, but no user-visible symptom
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong now
+      description: The current shape of the code or behavior. Paths and symbols make this findable later.
+      placeholder: |
+        e.g. `src/player.rs` decodes the same file on every play instead of caching it, and
+        rapid-fire hotkeys stutter.
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it costs to leave alone
+      description: What this blocks, slows, or risks. Debt with no stated cost never gets prioritized over feature work.
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: What "done" looks like
+      description: Optional. The shape of an acceptable fix, or a boundary on it — "no schema change", "behavior must stay identical".
+    validations:
+      required: false
+
+  - type: input
+    id: references
+    attributes:
+      label: Related pull requests or issues
+      description: Optional. Where this came from — the pull request that took the shortcut, the issue that hit the wall.
+      placeholder: '#14, #9'
+    validations:
+      required: false
