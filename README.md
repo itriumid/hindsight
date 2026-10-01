@@ -9,8 +9,9 @@ you save, nothing is written to disk, and nothing ever leaves your computer.
 
 ## Status
 
-**The application is early**: it records from the moment it starts, lives in the menu bar, and
-saves the last 1, 5 or 15 minutes as a clip. Settings and a clip list are being built now. The recording core (`core/`) underneath it is done and measured, through a
+**The application is early**: after a first-run screen, it records, lives in the menu bar, saves
+the last 1, 5 or 15 minutes as a clip, and has settings for the microphone, how far back it goes
+(up to three hours), a save shortcut and launch at login. A clip list is being built now. The recording core (`core/`) underneath it is done and measured, through a
 spike (`spike/`) made to answer whether the idea holds up before any interface was designed.
 On macOS:
 

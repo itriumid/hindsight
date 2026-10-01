@@ -11,10 +11,29 @@ pub fn device_name(device: &cpal::Device) -> String {
     device.description().map(|description| description.name().to_string()).unwrap_or_else(|_| "(unnamed)".into())
 }
 
-/// The first microphone whose name contains `wanted`, ignoring case.
+/// The microphone called `wanted`: an exact match (ignoring case) first, so "USB Mic" never
+/// picks "USB Mic 2"; failing that, the first whose name contains it.
 pub fn find_device(host: &cpal::Host, wanted: &str) -> Option<cpal::Device> {
+    let devices: Vec<cpal::Device> = host.input_devices().ok()?.collect();
+    let names: Vec<String> = devices.iter().map(device_name).collect();
+    best_match(&names, wanted).map(|index| devices[index].clone())
+}
+
+/// Which of `names` is meant by `wanted`; see `find_device`.
+pub fn best_match(names: &[String], wanted: &str) -> Option<usize> {
     let wanted = wanted.to_lowercase();
-    host.input_devices().ok()?.find(|device| device_name(device).to_lowercase().contains(&wanted))
+    names
+        .iter()
+        .position(|name| name.to_lowercase() == wanted)
+        .or_else(|| names.iter().position(|name| name.to_lowercase().contains(&wanted)))
+}
+
+/// Every microphone the system lists, by name.
+pub fn input_device_names() -> Vec<String> {
+    cpal::default_host()
+        .input_devices()
+        .map(|devices| devices.map(|device| device_name(&device)).collect())
+        .unwrap_or_default()
 }
 
 /// The microphone to use now: the chosen one, else the fallback, else the system default.
@@ -160,5 +179,28 @@ impl Resampler {
         if let Some(&last) = input.last() {
             self.previous = last;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::best_match;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn an_exact_name_wins_over_a_longer_one_that_contains_it() {
+        let listed = names(&["USB Mic 2", "USB Mic", "MacBook Air Microphone"]);
+        assert_eq!(best_match(&listed, "USB Mic"), Some(1));
+        assert_eq!(best_match(&listed, "usb mic"), Some(1));
+    }
+
+    #[test]
+    fn part_of_a_name_still_finds_it() {
+        let listed = names(&["Fool's Microphone", "MacBook Air Microphone"]);
+        assert_eq!(best_match(&listed, "macbook"), Some(1));
+        assert_eq!(best_match(&listed, "headset"), None);
     }
 }

@@ -7,11 +7,54 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    /// False until the first-run screen is finished; nothing records before that.
+    pub welcomed: bool,
     /// Where clips are saved; asked on the first save until it's chosen.
     pub clips_folder: Option<PathBuf>,
+    /// The chosen microphone by name; `None` follows the system default.
+    pub microphone: Option<String>,
+    /// Used while the chosen microphone is away; `None` means the system default.
+    pub fallback_microphone: Option<String>,
+    /// How far back Hindsight can go: 15 to 180 minutes.
+    pub buffer_minutes: u32,
+    /// A global shortcut that saves; none by default.
+    pub save_hotkey: Option<String>,
+    /// How much the shortcut saves.
+    pub save_hotkey_minutes: u32,
+    /// macOS only: a Dock icon as well as the menu bar.
+    pub show_in_dock: bool,
+    pub show_in_menu_bar: bool,
+    pub launch_at_login: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            welcomed: false,
+            clips_folder: None,
+            microphone: None,
+            fallback_microphone: None,
+            buffer_minutes: 15,
+            save_hotkey: None,
+            save_hotkey_minutes: 15,
+            show_in_dock: false,
+            show_in_menu_bar: true,
+            launch_at_login: false,
+        }
+    }
+}
+
+pub const SHORTEST_BUFFER_MINUTES: u32 = 15;
+pub const LONGEST_BUFFER_MINUTES: u32 = 180;
+
+/// Can this window still be reached with these settings? On macOS, without a menu bar icon the
+/// Dock icon is the only way back to the window, so they can't both be off. Elsewhere, opening
+/// Hindsight again shows the running window (it never runs twice), so the tray icon can go.
+pub fn reachable(show_in_dock: bool, show_in_menu_bar: bool) -> bool {
+    show_in_menu_bar || show_in_dock || !cfg!(target_os = "macos")
 }
 
 pub struct SettingsStore {
@@ -54,4 +97,35 @@ fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
         let _ = std::fs::remove_file(&partial);
         error.to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_the_safe_ones() {
+        let settings = Settings::default();
+        assert!(!settings.welcomed, "nothing records before the first-run screen");
+        assert!(!settings.launch_at_login);
+        assert!(settings.save_hotkey.is_none());
+        assert!(settings.show_in_menu_bar);
+        assert_eq!(settings.buffer_minutes, 15);
+    }
+
+    #[test]
+    fn an_old_file_missing_new_settings_still_loads() {
+        let loaded: Settings = serde_json::from_str(r#"{"clipsFolder":"/tmp/clips"}"#).unwrap();
+        assert_eq!(loaded.clips_folder, Some(PathBuf::from("/tmp/clips")));
+        assert_eq!(loaded.buffer_minutes, 15);
+        assert!(loaded.show_in_menu_bar);
+    }
+
+    #[test]
+    fn hindsight_can_always_be_reached() {
+        assert!(reachable(true, true));
+        assert!(reachable(false, true));
+        assert!(reachable(true, false));
+        assert_eq!(reachable(false, false), !cfg!(target_os = "macos"));
+    }
 }

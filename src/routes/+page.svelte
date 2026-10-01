@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import Settings, { type SettingsView } from "$lib/components/Settings.svelte";
+  import Welcome from "$lib/components/Welcome.svelte";
 
   interface Status {
     microphone: string | null;
@@ -21,6 +23,8 @@
     seconds: number;
   }
 
+  let settings = $state<SettingsView | null>(null);
+  let view = $state<"home" | "settings">("home");
   let status = $state<Status | null>(null);
   let folder = $state<string | null>(null);
   let waiting = $state<number | null>(null);
@@ -62,7 +66,13 @@
     if (status.microphone) waiting = null;
   }
 
+  async function loadSettings() {
+    settings = await invoke<SettingsView>("get_settings");
+    folder = settings.clipsFolder;
+  }
+
   onMount(() => {
+    loadSettings();
     refresh();
     invoke<string | null>("clips_folder").then((value) => (folder = value));
     const timer = setInterval(refresh, 1000);
@@ -83,8 +93,20 @@
   });
 </script>
 
+{#if settings && !settings.welcomed}
+  <Welcome onstart={loadSettings} />
+{:else if settings}
 <main>
-  <h1>Hindsight</h1>
+  <header>
+    <h1>{view === "home" ? "Hindsight" : "Settings"}</h1>
+    <button class="link" onclick={() => (view = view === "home" ? "settings" : "home")}>
+      {view === "home" ? "Settings" : "Done"}
+    </button>
+  </header>
+
+  {#if view === "settings"}
+    <Settings bind:settings />
+  {:else}
 
   {#if status?.microphone}
     <p class="state recording">
@@ -152,9 +174,24 @@
       </div>
     {/if}
   </section>
+  {/if}
 </main>
+{/if}
 
 <style>
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  button.link {
+    padding: var(--space-1) var(--space-2);
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
   main {
     display: flex;
     flex-direction: column;
