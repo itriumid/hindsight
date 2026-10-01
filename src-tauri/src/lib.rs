@@ -1,6 +1,9 @@
-//! Hindsight's application: keeps the process's memory out of crash dumps, records from launch,
-//! lives in the menu bar, and saves clips on request.
+//! Hindsight's application: keeps the process's memory out of crash dumps, records from the
+//! moment the first-run screen is done, lives in the menu bar, and saves clips on request.
 
+mod commands;
+mod data;
+mod hotkeys;
 mod recording;
 mod saving;
 mod settings;
@@ -10,8 +13,12 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_autostart::MacosLauncher;
 
 use settings::SettingsStore;
+
+/// Launch at login starts Hindsight with this, so it starts quietly in the menu bar.
+const BACKGROUND: &str = "--background";
 
 #[tauri::command]
 fn clips_folder(settings: State<'_, SettingsStore>) -> Option<PathBuf> {
@@ -47,20 +54,47 @@ pub fn run() {
     hindsight_core::privacy::keep_memory_out_of_crash_dumps();
 
     let app = tauri::Builder::default()
+        // First, so a second launch hands over to the running Hindsight before doing anything:
+        // two copies would mean two recorders.
+        .plugin(tauri_plugin_single_instance::init(|app, _arguments, _directory| {
+            tray::show_main_window(app);
+        }))
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![BACKGROUND])))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(hotkeys::handle)
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .manage(recording::Recording(Mutex::new(None)))
         .manage(saving::LastClip::default())
+        .manage(data::RemoveOnExit::default())
         .setup(|app| {
             let handle = app.handle();
             app.manage(SettingsStore::load(handle)?);
-            // Menu bar only by default: an always-on recorder doesn't need a Dock icon.
+            let settings = app.state::<SettingsStore>().get();
+
             #[cfg(target_os = "macos")]
-            handle.set_dock_visibility(false)?;
+            handle.set_dock_visibility(settings.show_in_dock)?;
             tray::create(handle)?;
-            recording::start(handle);
+            tray::set_visible(handle, settings.show_in_menu_bar);
+            // A saved shortcut another app took since won't register; settings will say so when
+            // someone tries to set it again, and the menu still saves.
+            let _ = hotkeys::apply(handle, settings.save_hotkey.as_deref());
+
+            if settings.welcomed {
+                recording::start(handle);
+            } else {
+                tray::set_status(handle, "Not recording yet: finish setting up".into());
+            }
             recording::keep_menu_current(handle);
+
+            let quietly = std::env::args().any(|argument| argument == BACKGROUND);
+            if !settings.welcomed || !quietly {
+                tray::show_main_window(handle);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,7 +102,17 @@ pub fn run() {
             clips_folder,
             choose_clips_folder,
             reveal_clips_folder,
-            save_last
+            save_last,
+            commands::get_settings,
+            commands::list_microphones,
+            commands::set_microphones,
+            commands::set_buffer_minutes,
+            commands::set_save_hotkey,
+            commands::set_presence,
+            commands::set_launch_at_login,
+            commands::finish_welcome,
+            commands::pick_folder,
+            commands::remove_all_data
         ])
         .on_window_event(|window, event| {
             // Closing the window keeps Hindsight recording in the menu bar; Quit is in the menu.
@@ -84,9 +128,8 @@ pub fn run() {
         if let RunEvent::Exit = event {
             // Stopping the recorder joins its threads: the stream closes and the buffer and its
             // key are wiped before the process ends.
-            if let Some(recording) = app.try_state::<recording::Recording>() {
-                recording.0.lock().expect("recording").take();
-            }
+            recording::stop(app);
+            data::remove_if_asked(app);
         }
     });
 }

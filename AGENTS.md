@@ -57,8 +57,8 @@ Hindsight keeps a rolling recording of the last few minutes in memory and saves 
 It's a Cargo workspace plus a SvelteKit frontend, like Honk: `core/` (`hindsight-core`) is the
 recording core, `src-tauri/` is the Tauri 2 application built on it (frontend in `src/`, static
 adapter, TypeScript, pnpm), and `spike/` is a command-line measurement tool. The application
-records from launch, lives in the menu bar (tray elsewhere) and saves clips; settings and the clip
-list are being added. The core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
+records once its first-run screen is done, lives in the menu bar (tray elsewhere), saves clips,
+and has settings; the clip list is being added. The core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
 ring buffer encrypted with ChaCha20 under a per-run key locked in RAM, and clips saved as Ogg
 Opus.
 
@@ -99,6 +99,13 @@ CI: `build.yml` builds, tests and bundles the application for six targets (macOS
 Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exists;
 `spike.yml` runs the core's tests and the benchmark on every system and posts the numbers.
 
+- **Nothing records before the first-run screen is finished** (`welcomed` in settings), and
+  Hindsight never runs twice (`tauri-plugin-single-instance`, registered first). Keep both.
+- **Settings that could strand the window** go through `settings::reachable`: on macOS the menu
+  bar icon and the Dock icon can't both be off.
+- **Launch at login** uses a LaunchAgent (`~/Library/LaunchAgents`) on macOS, not AppleScript,
+  which would ask to control System Events. "Remove all Hindsight data" (`data.rs`) turns it off
+  and deletes Hindsight's own folders as the app exits, never the clips.
 - **The menu bar glyph** is `branding/tray-template.svg`, rendered to
   `src-tauri/icons/tray-template@2x.png` at 44 by 44 (black on transparent; macOS tints it).
   The app icon is `branding/icon.svg`, rendered with `pnpm tauri icon`.

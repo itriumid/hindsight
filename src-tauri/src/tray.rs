@@ -97,6 +97,12 @@ pub fn enable_show_last(app: &AppHandle) {
     });
 }
 
+pub fn set_visible(app: &AppHandle, visible: bool) {
+    if let Some(tray) = app.tray_by_id("hindsight") {
+        let _ = tray.set_visible(visible);
+    }
+}
+
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();

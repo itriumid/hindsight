@@ -9,6 +9,7 @@ use hindsight_core::recorder::{Event, LossReason, Recorder, Settings};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::settings::SettingsStore;
 use crate::tray;
 
 pub struct Recording(pub Mutex<Option<Recorder>>);
@@ -58,8 +59,6 @@ fn notice(event: Event) -> Notice {
     }
 }
 
-pub const DEFAULT_BUFFER_MINUTES: f64 = 15.0;
-
 /// The menu's first line.
 fn status_line(event: &Event) -> String {
     match event {
@@ -70,14 +69,36 @@ fn status_line(event: &Event) -> String {
     }
 }
 
+/// Starts recording with the saved settings, replacing a recorder that's already running.
 pub fn start(app: &AppHandle) {
+    let saved = app.state::<SettingsStore>().get();
+    let settings = Settings {
+        primary: saved.microphone,
+        fallback: saved.fallback_microphone,
+        buffer_minutes: f64::from(saved.buffer_minutes),
+        ..Settings::default()
+    };
     let handle = app.clone();
-    let settings = Settings { buffer_minutes: DEFAULT_BUFFER_MINUTES, ..Settings::default() };
+    // The old recorder, if any, stops first: it wipes its buffer and key, and frees the
+    // microphone for the new one.
+    stop(app);
     let recorder = Recorder::start(settings, move |event| {
         tray::set_status(&handle, status_line(&event));
         let _ = handle.emit("recorder", notice(event));
     });
     *app.state::<Recording>().0.lock().expect("recording") = Some(recorder);
+}
+
+pub fn stop(app: &AppHandle) {
+    let old = app.state::<Recording>().0.lock().expect("recording").take();
+    drop(old); // joins the threads outside the lock
+}
+
+pub fn set_microphones(app: &AppHandle) {
+    let saved = app.state::<SettingsStore>().get();
+    if let Some(recorder) = app.state::<Recording>().0.lock().expect("recording").as_ref() {
+        recorder.set_microphones(saved.microphone, saved.fallback_microphone);
+    }
 }
 
 /// Keeps the menu's "Holding the last …" line current, once a second, changing it only when
@@ -91,11 +112,12 @@ pub fn keep_menu_current(app: &AppHandle) {
             loop {
                 std::thread::sleep(Duration::from_secs(1));
                 let Some(recording) = handle.try_state::<Recording>() else { continue };
-                let buffered = match recording.0.lock().expect("recording").as_ref() {
-                    Some(recorder) => recorder.buffered(),
-                    None => return, // quitting
+                let buffered = recording.0.lock().expect("recording").as_ref().map(|recorder| recorder.buffered());
+                let buffer_seconds = f64::from(handle.state::<SettingsStore>().get().buffer_minutes) * 60.0;
+                let text = match buffered {
+                    Some(buffered) => holding(buffered.as_secs_f64(), buffer_seconds),
+                    None => "Not recording".into(),
                 };
-                let text = holding(buffered.as_secs_f64(), DEFAULT_BUFFER_MINUTES * 60.0);
                 if text != shown {
                     tray::set_buffered(&handle, text.clone());
                     shown = text;
@@ -144,16 +166,17 @@ mod tests {
 }
 
 #[tauri::command]
-pub fn recorder_status(recording: State<'_, Recording>) -> Status {
+pub fn recorder_status(recording: State<'_, Recording>, settings: State<'_, SettingsStore>) -> Status {
+    let buffer_seconds = f64::from(settings.get().buffer_minutes) * 60.0;
     let recording = recording.0.lock().expect("recording");
     let Some(recorder) = recording.as_ref() else {
-        return Status { microphone: None, role: None, buffered_seconds: 0.0, buffer_seconds: 0.0 };
+        return Status { microphone: None, role: None, buffered_seconds: 0.0, buffer_seconds };
     };
     let microphone = recorder.microphone();
     Status {
         role: microphone.as_ref().map(|(_, role)| role_name(*role)),
         microphone: microphone.map(|(name, _)| name),
         buffered_seconds: recorder.buffered().as_secs_f64(),
-        buffer_seconds: Duration::from_secs_f64(DEFAULT_BUFFER_MINUTES * 60.0).as_secs_f64(),
+        buffer_seconds,
     }
 }
