@@ -1,0 +1,129 @@
+name: Homebrew
+
+# Publishing a release opens a pull request on itriumid/homebrew-tap that points Casks/hindsight.rb at
+# the new version's .dmg. Nothing merges by itself: review the pull request there and merge it,
+# and `brew upgrade` picks the new version up.
+#
+# Run it manually (Actions → Homebrew → Run workflow) with a tag to redo it for a release, for
+# example after the first run failed.
+#
+# Writing to another repository needs more than this workflow's own token, which can only reach
+# this repository. The HOMEBREW_TAP_TOKEN secret holds a fine-grained personal access token for
+# itriumid/homebrew-tap alone, with Contents and Pull requests set to Read and write. A pull
+# request opened with it runs the tap's required checks; one opened with this workflow's own
+# token wouldn't, and could never merge.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to update the cask to, such as v0.2.1'
+        required: true
+        type: string
+
+# Any `permissions:` block replaces the default token scopes, so grant per job.
+permissions: {}
+
+jobs:
+  update-cask:
+    name: Update the Homebrew cask
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check the tag is a version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::$TAG isn't a release tag. Use vMAJOR.MINOR.PATCH, e.g. v0.2.0."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # Hashed from the published file itself, and cross-checked against the digest GitHub
+      # records for it, so the cask can't end up with the hash of anything else.
+      - name: Hash the .dmg
+        id: hash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          FILE: Hindsight_${{ steps.version.outputs.version }}_universal.dmg
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$FILE"
+          sha256=$(sha256sum "$FILE" | cut -d ' ' -f 1)
+          digest=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq ".assets[] | select(.name == \"$FILE\") | .digest")
+          if [ "$digest" != "sha256:$sha256" ]; then
+            echo "::error::$FILE hashes to $sha256, but GitHub records its digest as ${digest:-nothing}."
+            exit 1
+          fi
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: itriumid/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          persist-credentials: true
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA256: ${{ steps.hash.outputs.sha256 }}
+          ASSIGNEE: ${{ github.actor }}
+        run: |
+          # Branch names are kebab-case, without dots: chore/hindsight-0-2-1.
+          branch="chore/hindsight-${VERSION//./-}"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            echo "::error::itriumid/homebrew-tap already has a $branch branch. Merge or close its pull request, delete the branch, then run this again."
+            exit 1
+          fi
+
+          sed -i -E \
+            -e "s/^  version \"[^\"]+\"$/  version \"$VERSION\"/" \
+            -e "s/^  sha256 \"[0-9a-f]{64}\"$/  sha256 \"$SHA256\"/" \
+            Casks/hindsight.rb
+          if git diff --quiet; then
+            echo "Casks/hindsight.rb already points at $VERSION. Nothing to do."
+            exit 0
+          fi
+          if ! grep -q "^  version \"$VERSION\"$" Casks/hindsight.rb || ! grep -q "^  sha256 \"$SHA256\"$" Casks/hindsight.rb; then
+            echo "::error::Couldn't update Casks/hindsight.rb: its version or sha256 line isn't in the expected form."
+            git diff
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898283+github-actions[bot]@users.noreply.github.com'
+          git switch --create "$branch"
+          git commit --all --quiet --message "Update Hindsight to $VERSION" \
+            --message "Points the cask at Hindsight_${VERSION}_universal.dmg from the $TAG release."
+          git push --quiet origin "$branch"
+
+          body=$(cat <<EOF
+          ## Why
+
+          Hindsight $VERSION is out: https://github.com/itriumid/hindsight/releases/tag/$TAG
+
+          ## What changed
+
+          \`Casks/hindsight.rb\` points at \`Hindsight_${VERSION}_universal.dmg\`, with SHA-256 \`$SHA256\`. The hash comes from the published file and matches the digest GitHub records for it.
+
+          ## How to verify
+
+          After merging: \`brew update && brew info --cask itriumid/tap/hindsight\` shows $VERSION, and \`brew upgrade --cask hindsight\` installs it.
+
+          ---
+
+          - [ ] Merging with **Create a merge commit**
+          - [x] One \`type:\` label applied, matching the branch prefix
+          EOF
+          )
+          gh pr create --base main --head "$branch" --title "Update Hindsight to $VERSION" \
+            --body "$body" --label 'type: chore' --assignee "$ASSIGNEE"
