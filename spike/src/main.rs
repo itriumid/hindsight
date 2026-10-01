@@ -22,8 +22,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait};
-use hindsight_core::capture::{Audio, Heartbeat, Resampler, Role, choose_device, device_name, find_device, open_stream};
+use hindsight_core::capture::{Audio, Heartbeat, Resampler, choose_device, device_name, open_stream};
 use hindsight_core::encoding::{DEFAULT_COMPLEXITY, FRAME, PACKET_BYTES, PACKET_SECONDS, ring_for};
+use hindsight_core::recorder::{Event, Recorder, Settings, Snapshot};
 use hindsight_core::ring::{Locking, Ring};
 use hindsight_core::{clip, privacy};
 
@@ -132,6 +133,20 @@ fn save_and_check(ring: &Ring, save_minutes: f64, input_rate: u32, name: &str) {
     verify(&path);
 }
 
+fn save_snapshot(snapshot: &Snapshot, save_minutes: f64, name: &str) {
+    let path = PathBuf::from(format!("{name}-last-{save_minutes}-min.opus"));
+    let started = Instant::now();
+    let written = clip::write(&path, snapshot.packets.iter(), snapshot.input_sample_rate).expect("write clip");
+    println!(
+        "saved {} ({} packets, {:.1} s of audio) in {:.0} ms",
+        path.display(),
+        written,
+        snapshot.duration().as_secs_f64(),
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    verify(&path);
+}
+
 fn verify(path: &Path) {
     match clip::decode(path) {
         Ok(decoded) => {
@@ -166,156 +181,39 @@ fn devices() {
 }
 
 fn record(seconds: f64, buffer_minutes: f64, save_minutes: f64, primary: Option<&String>, fallback: Option<&String>) {
-    let host = cpal::default_host();
     println!(
         "== record: {seconds} s; microphone {}, fallback {}",
         primary.map(String::as_str).unwrap_or("(system default)"),
         fallback.map(String::as_str).unwrap_or("(system default)")
     );
-
-    let (audio_sender, audio_receiver) = mpsc::channel::<Audio>();
-    let encoding = std::thread::spawn(move || {
-        let mut ring = ring_for(buffer_minutes);
-        let mut encoder = encoder();
-        let mut resampler: Option<(u32, Resampler)> = None;
-        let mut pending: Vec<f32> = Vec::with_capacity(FRAME * 4);
-        let mut packet = [0u8; 256];
-        let mut odd_sizes = 0;
-        let mut last_rate = 48_000;
-        let skip_encode = setting("HINDSIGHT_SKIP_ENCODE") == Some(1);
-        while let Ok(message) = audio_receiver.recv() {
-            match message {
-                Audio::Samples { rate, samples } => {
-                    if resampler.as_ref().map(|(current, _)| *current) != Some(rate) {
-                        resampler = Some((rate, Resampler::new(rate, 48_000)));
-                    }
-                    last_rate = rate;
-                    resampler.as_mut().unwrap().1.push(&samples, &mut pending);
-                }
-                Audio::Gap(duration) => {
-                    let silent = (duration.as_secs_f64() * 48_000.0) as usize;
-                    pending.extend(std::iter::repeat_n(0.0, silent));
-                }
-            }
-            if skip_encode {
-                pending.clear();
-            }
-            while pending.len() >= FRAME {
-                let size = encoder.encode_float_to_slice(&pending[..FRAME], &mut packet).expect("encode");
-                if size != PACKET_BYTES {
-                    odd_sizes += 1;
-                }
-                ring.push(&packet[..size]);
-                pending.drain(..FRAME);
-            }
-        }
-        (ring, odd_sizes, last_rate)
-    });
-
+    let settings = Settings {
+        primary: primary.cloned(),
+        fallback: fallback.cloned(),
+        buffer_minutes,
+        complexity: setting("HINDSIGHT_COMPLEXITY").map_or(DEFAULT_COMPLEXITY, |value| value as u8),
+        buffer_frames: setting("HINDSIGHT_BUFFER_FRAMES"),
+    };
     let cpu_before = cpu_seconds();
     let started = Instant::now();
-    let deadline = started + Duration::from_secs_f64(seconds);
-    let (lost_sender, lost_receiver) = mpsc::channel::<String>();
-    let mut current: Option<(cpal::Stream, Role, String)> = None;
-    let mut silent_since: Option<Instant> = Some(started);
-    let mut last_check = Instant::now();
-    let mut switches = 0;
-    let mut heartbeat = Heartbeat::new();
-    // Some devices go quiet without reporting an error; no audio this long counts as lost.
-    let watchdog = Duration::from_millis(1500);
-    // After the chosen microphone fails, wait before trying it again, longer each time, so a
-    // phone that stays listed while silent doesn't bounce recording back and forth.
-    let mut retry_primary_at = Instant::now();
-    let mut retry_delay = Duration::from_secs(10);
-
-    let elapsed = |at: Instant| at.duration_since(started).as_secs_f64();
-    while Instant::now() < deadline {
-        // Open a microphone when there's none, or move back to the chosen one when it returns.
-        let wants_switch = match &current {
-            None => true,
-            Some((_, role, _)) => {
-                *role != Role::Primary
-                    && last_check.elapsed() > Duration::from_secs(2)
-                    && Instant::now() >= retry_primary_at
-                    && primary.and_then(|name| find_device(&host, name)).is_some()
-            }
-        };
-        if current.is_some() && last_check.elapsed() > Duration::from_secs(2) {
-            last_check = Instant::now();
+    let recorder = Recorder::start(settings, move |event| {
+        let at = started.elapsed().as_secs_f64();
+        match event {
+            Event::Recording { device, role } => println!("  {at:5.1} s: recording from {device} ({role:?})"),
+            Event::Lost { device, role, reason } => println!("  {at:5.1} s: lost {device} ({role:?}): {reason:?}"),
+            Event::Waiting { retry_in } => println!("  {at:5.1} s: no microphone; trying again in {} s", retry_in.as_secs()),
         }
-        if wants_switch {
-            let primary_now = if Instant::now() >= retry_primary_at { primary } else { None };
-            if let Some((device, role)) = choose_device(&host, primary_now, fallback) {
-                let name = device_name(&device);
-                let now = Instant::now();
-                // Stop the old stream first, then count the time until the new one runs as a gap.
-                if current.take().is_some() {
-                    silent_since = Some(now);
-                }
-                let fresh = Heartbeat::new();
-                fresh.beat(); // the clock starts at opening, so a stream that never delivers counts
-                fresh.heard(&[1.0]);
-                match stream(&device, audio_sender.clone(), lost_sender.clone(), fresh.clone()) {
-                    Ok(stream) => {
-                        heartbeat = fresh;
-                        if let Some(since) = silent_since.take() {
-                            let gap = since.elapsed();
-                            if gap > Duration::from_millis(30) && switches > 0 {
-                                let _ = audio_sender.send(Audio::Gap(gap));
-                            }
-                        }
-                        println!("  {:5.1} s: recording from {name} ({role:?})", elapsed(Instant::now()));
-                        current = Some((stream, role, name));
-                        switches += 1;
-                    }
-                    Err(error) => eprintln!("  couldn't open {name}: {error}"),
-                }
-            }
-            last_check = Instant::now();
-        }
-        // A lost stream: drop it now, so the next pass opens the fallback.
-        let reported = match lost_receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(reason) => {
-                eprintln!("  stream error: {reason}");
-                true
-            }
-            Err(_) => false,
-        };
-        let starved = current.is_some() && heartbeat.silent_for() > watchdog;
-        let dead = current.is_some() && heartbeat.digital_silence_for() > Duration::from_secs(3);
-        if starved {
-            println!("  {:5.1} s: no audio for {:.1} s, treating it as lost", elapsed(Instant::now()), heartbeat.silent_for().as_secs_f64());
-        } else if dead {
-            println!("  {:5.1} s: only exact zeros for {:.1} s, treating it as lost", elapsed(Instant::now()), heartbeat.digital_silence_for().as_secs_f64());
-        }
-        let silent = starved || dead;
-        if reported || silent {
-            if let Some((_, role, name)) = current.take() {
-                println!("  {:5.1} s: lost {name} ({role:?})", elapsed(Instant::now()));
-                silent_since = Some(Instant::now());
-                if role == Role::Primary {
-                    retry_primary_at = Instant::now() + retry_delay;
-                    println!("         won't try it again for {} s", retry_delay.as_secs());
-                    retry_delay = (retry_delay * 2).min(Duration::from_secs(60));
-                }
-            }
-            while lost_receiver.try_recv().is_ok() {}
-        }
-    }
-    drop(current);
-    drop(audio_sender); // closes the channel, which ends the encoding thread
-    let (ring, odd_sizes, rate) = encoding.join().expect("encoding thread");
+    });
+    std::thread::sleep(Duration::from_secs_f64(seconds));
+    let buffered = recorder.buffered();
+    let snapshot = recorder.snapshot(Duration::from_secs_f64(save_minutes * 60.0));
+    recorder.with_ring(|ring| report_buffer(ring, 0));
+    drop(recorder); // stops the microphone and both threads
     let wall = started.elapsed().as_secs_f64();
     let cpu = cpu_seconds() - cpu_before;
 
     println!("CPU: {:.2} s over {:.1} s = {:.2}% of one core (capture + encoding)", cpu, wall, cpu / wall * 100.0);
-    println!(
-        "timeline: {:.1} s of audio for {:.1} s of wall time (gaps kept as silence)",
-        ring.len() as f64 * PACKET_SECONDS,
-        wall
-    );
-    report_buffer(&ring, odd_sizes);
-    save_and_check(&ring, save_minutes, rate, "record");
+    println!("timeline: {:.1} s of audio for {:.1} s of wall time (gaps kept as silence)", buffered.as_secs_f64(), wall);
+    save_snapshot(&snapshot, save_minutes, "record");
 }
 
 /// Records raw audio once, then encodes the identical samples at several complexities, so a
