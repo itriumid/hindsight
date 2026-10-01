@@ -53,13 +53,36 @@ reopened — and skip it otherwise.
 
 ## This repository
 
-<!--
-  Repository-specific instructions go here and are owned by this repository. Nothing syncs
-  this file back to the handbook, so edit freely. Good things to put here:
-    - what this project is, and its stack
-    - build, test and lint commands, and which of them to run before calling a change done
-    - known gotchas specific to this codebase
-  Anything that would apply to every repository belongs in the handbook instead.
--->
+Hindsight keeps a rolling recording of the last few minutes in memory and saves them on request.
+There's no application yet: `spike/` is a Rust command-line measurement tool for the recording
+core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
+ring buffer encrypted with ChaCha20 under a per-run key locked in RAM, and clips saved as Ogg
+Opus.
 
-_To be filled in._
+- **Recorded audio never touches disk until the user saves**, and never leaves the computer.
+  Don't add logging, crash reporting or caching that could write audio or transcripts anywhere.
+- **Never reuse a nonce.** A packet's nonce is its sequence number under the current key, which
+  only grows; `clear()` changes the key before the count restarts. The ring tests check this,
+  including one that fails if the slot position is used as the nonce.
+- **Test recordings of real voices are deleted after use.** Keep them out of the repository;
+  `.spike-output/` is gitignored for that.
+
+### Commands
+
+| What | Command (from `spike/`) |
+|---|---|
+| Build | `cargo build --release` |
+| Unit tests | `cargo test` |
+| Benchmark three hours of synthetic speech | `cargo run --release -- bench 3 180 15` |
+| List microphones | `cargo run --release -- devices` |
+| Record from the microphone | `cargo run --release -- record 30 180 0.5 [microphone] [fallback]` |
+| Blind listening test of encoder settings | `cargo run --release -- compare 20 [microphone]` |
+
+CI (`.github/workflows/spike.yml`) runs the tests and the benchmark on macOS, Linux and Windows,
+Intel and ARM, and posts each system's numbers to the run summary.
+
+### Environment gotchas
+
+- `cargo` may not be on `PATH` in a non-interactive shell: run `. "$HOME/.cargo/env"` first.
+- libopus is compiled from source, which needs `cmake` (`brew install cmake` on macOS; GitHub's
+  runners have it).
