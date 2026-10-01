@@ -16,16 +16,16 @@ const MID_STREAM_PRE_SKIP: u16 = 3840;
 
 const SERIAL: u32 = 0x4869_6e64; // "Hind"
 
-pub fn write<'a>(
+pub fn write<P: AsRef<[u8]>>(
     path: &Path,
-    packets: impl Iterator<Item = &'a [u8]>,
+    packets: impl Iterator<Item = P>,
     input_sample_rate: u32,
 ) -> std::io::Result<usize> {
     let mut writer = PacketWriter::new(BufWriter::new(File::create(path)?));
     writer.write_packet(opus_head(input_sample_rate).to_vec(), SERIAL, PacketWriteEndInfo::EndPage, 0)?;
     writer.write_packet(opus_tags(), SERIAL, PacketWriteEndInfo::EndPage, 0)?;
 
-    let packets: Vec<&[u8]> = packets.collect();
+    let packets: Vec<P> = packets.collect();
     let last = packets.len().saturating_sub(1);
     for (index, packet) in packets.iter().enumerate() {
         let granule = u64::from(MID_STREAM_PRE_SKIP) + (index as u64 + 1) * SAMPLES_PER_PACKET;
@@ -36,7 +36,7 @@ pub fn write<'a>(
         } else {
             PacketWriteEndInfo::NormalPacket
         };
-        writer.write_packet(packet.to_vec(), SERIAL, end, granule)?;
+        writer.write_packet(packet.as_ref().to_vec(), SERIAL, end, granule)?;
     }
     writer.inner_mut().flush()?;
     Ok(packets.len())
