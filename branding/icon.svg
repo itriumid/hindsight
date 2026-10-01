@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Hindsight's app icon: an arrow turning back around a clock's hands, looking back in
+       time. Same tile as Honk's: an 824 px rounded square centered on a 1024 canvas,
+       graphite with pastel pink. Render it to src-tauri/icons with `pnpm tauri icon`. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#363636"/>
+      <stop offset="1" stop-color="#2B2B2B"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
+  <g fill="none" stroke="#FEBFCA" stroke-width="52" stroke-linecap="round">
+    <path d="M 303.5 414.8 A 230 230 0 1 1 323.6 643.9"/>
+    <!-- Clock hands: the long one at twelve, the short one turned back to ten -->
+    <path d="M 512 512 L 512 372"/>
+    <path d="M 512 512 L 430 464"/>
+  </g>
+  <path d="M 270.6 485.5 L 250.7 381.3 L 363.1 433.7 Z" fill="#FEBFCA" stroke="#FEBFCA" stroke-width="20" stroke-linejoin="round"/>
+</svg>

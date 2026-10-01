@@ -1,7 +1,18 @@
 [workspace]
-members = ["core", "spike"]
+members = ["core", "spike", "src-tauri"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+# A workspace's profiles live here, not in its members.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+# On a panic the process ends at once. A clip half-written at that moment is left as a
+# .hindsight-partial file, which the next start sweeps away.
+panic = "abort"
+strip = true
