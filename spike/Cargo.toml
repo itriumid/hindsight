@@ -17,6 +17,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security_Cryptography",
+  "Win32_System_ErrorReporting",
   "Win32_System_Memory",
   "Win32_System_ProcessStatus",
   "Win32_System_Threading",

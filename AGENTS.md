@@ -64,6 +64,11 @@ Opus.
 - **Never reuse a nonce.** A packet's nonce is its sequence number under the current key, which
   only grows; `clear()` changes the key before the count restarts. The ring tests check this,
   including one that fails if the slot position is used as the nonce.
+- **Leave no dead files.** Clips are written atomically (`clip::write`: a hidden
+  `.hindsight-partial` file, flushed, then renamed), and `clip::sweep_partials` removes any a
+  crash left. Crash dumps are kept free of memory (`privacy.rs`), using only per-process calls
+  that write no setting of their own. Anything else the application stores goes in its data
+  folder, where "Remove all Hindsight data" can delete it.
 - **Test recordings of real voices are deleted after use.** Keep them out of the repository;
   `.spike-output/` is gitignored for that.
 
