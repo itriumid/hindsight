@@ -6,4 +6,5 @@ pub mod capture;
 pub mod clip;
 pub mod encoding;
 pub mod privacy;
+pub mod recorder;
 pub mod ring;

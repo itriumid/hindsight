@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Shown in macOS's microphone permission prompt. Without it, macOS ends the app the moment
+       it opens a microphone. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Hindsight keeps the last few minutes of what's said near your Mac in memory, so you can save them when you need to. Nothing is written to disk until you save, and nothing leaves your Mac.</string>
+</dict>
+</plist>

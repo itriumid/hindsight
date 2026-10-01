@@ -56,13 +56,17 @@ reopened — and skip it otherwise.
 Hindsight keeps a rolling recording of the last few minutes in memory and saves them on request.
 It's a Cargo workspace plus a SvelteKit frontend, like Honk: `core/` (`hindsight-core`) is the
 recording core, `src-tauri/` is the Tauri 2 application built on it (frontend in `src/`, static
-adapter, TypeScript, pnpm), and `spike/` is a command-line measurement tool. The application is
-an early shell; the recorder, menu bar and settings are being added. The core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
+adapter, TypeScript, pnpm), and `spike/` is a command-line measurement tool. The application
+records from launch and shows its status; the menu bar, saving and settings are being added. The
+core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
 ring buffer encrypted with ChaCha20 under a per-run key locked in RAM, and clips saved as Ogg
 Opus.
 
 - **Recorded audio never touches disk until the user saves**, and never leaves the computer.
   Don't add logging, crash reporting or caching that could write audio or transcripts anywhere.
+- **Microphone switching lives in `core/src/recorder.rs`.** `Switcher` makes every decision
+  (when to open, which microphone, back-offs) with time passed in, so its tests control the
+  clock; the threads around it only carry it out. Change behavior there, with a test.
 - **Never reuse a nonce.** A packet's nonce is its sequence number under the current key, which
   only grows; `clear()` changes the key before the count restarts. The ring tests check this,
   including one that fails if the slot position is used as the nonce.
