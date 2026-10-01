@@ -1,0 +1,16 @@
+# Groups GitHub's generated release notes by the handbook's type: labels. A pull request lands
+# in the first category it matches, so the type: categories come first. Chores are excluded
+# rather than categorized — they wouldn't appear in release notes if they shipped alone.
+changelog:
+  exclude:
+    labels:
+      - 'type: chore'
+  categories:
+    - title: New features
+      labels: ['type: feature']
+    - title: Improvements
+      labels: ['type: enhancement']
+    - title: Bug fixes
+      labels: ['type: bug']
+    - title: Other changes
+      labels: ['*']
