@@ -54,9 +54,10 @@ reopened — and skip it otherwise.
 ## This repository
 
 Hindsight keeps a rolling recording of the last few minutes in memory and saves them on request.
-There's no application yet. It's a Cargo workspace: `core/` (`hindsight-core`) is the recording
-core the application will use, and `spike/` is a command-line measurement tool built on it. The
-core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
+It's a Cargo workspace plus a SvelteKit frontend, like Honk: `core/` (`hindsight-core`) is the
+recording core, `src-tauri/` is the Tauri 2 application built on it (frontend in `src/`, static
+adapter, TypeScript, pnpm), and `spike/` is a command-line measurement tool. The application is
+an early shell; the recorder, menu bar and settings are being added. The core: capture with cpal, Opus at 16 kbps hard constant bitrate and complexity 5, a fixed-slot
 ring buffer encrypted with ChaCha20 under a per-run key locked in RAM, and clips saved as Ogg
 Opus.
 
@@ -77,17 +78,28 @@ Opus.
 
 | What | Command (from the repository root) |
 |---|---|
-| Build | `cargo build --release --workspace` |
+| Install the frontend's dependencies | `pnpm install` |
+| Run the application | `pnpm tauri dev` |
+| Type-check the frontend | `pnpm check` |
+| Build the frontend | `pnpm build` |
+| Build the Rust side | `cargo build --release --workspace` |
 | Unit tests | `cargo test --workspace` |
 | Benchmark three hours of synthetic speech | `cargo run --release -p hindsight-spike -- bench 3 180 15` |
 | List microphones | `cargo run --release -p hindsight-spike -- devices` |
 | Record from the microphone | `cargo run --release -p hindsight-spike -- record 30 180 0.5 [microphone] [fallback]` |
 | Blind listening test of encoder settings | `cargo run --release -p hindsight-spike -- compare 20 [microphone]` |
 
-CI (`.github/workflows/spike.yml`) runs the tests and the benchmark on macOS, Linux and Windows,
-Intel and ARM, and posts each system's numbers to the run summary.
+Before calling a change done, run `pnpm check`, `pnpm build` and `cargo test --workspace`.
+
+CI: `build.yml` builds, tests and bundles the application for six targets (macOS universal,
+Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exists;
+`spike.yml` runs the core's tests and the benchmark on every system and posts the numbers.
 
 ### Environment gotchas
+
+- Node is lazy-loaded through shell functions in the owner's zsh setup. If `node` or `pnpm`
+  resolves to a function instead of a binary, run `unfunction node npm npx pnpm; . "$HOME/.nvm/nvm.sh"`.
+- TypeScript stays on 6.x until svelte-check and SvelteKit accept 7.
 
 - `cargo` may not be on `PATH` in a non-interactive shell: run `. "$HOME/.cargo/env"` first.
 - libopus is compiled from source, which needs `cmake` (`brew install cmake` on macOS; GitHub's

@@ -9,9 +9,10 @@ you save, nothing is written to disk, and nothing ever leaves your computer.
 
 ## Status
 
-**There's no application yet.** This repository holds the recording core (`core/`) and a
-measurement spike built on it (`spike/`), made to answer whether the idea holds up before any
-interface is designed. On macOS:
+**The application is an early shell**: it opens a window, and the recorder, menu bar and settings
+are being built now. The recording core (`core/`) underneath it is done and measured, through a
+spike (`spike/`) made to answer whether the idea holds up before any interface was designed.
+On macOS:
 
 - About 2% of one processor core while recording.
 - A three-hour buffer takes 22 MB, allocated once. It's encrypted in memory with a key made

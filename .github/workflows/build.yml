@@ -1,0 +1,144 @@
+name: Build
+
+# Compiles, tests and bundles the app on every operating system Hindsight ships for. Each matrix job
+# is a required status check on main, so it runs on every pull request push, not only on paths
+# that look relevant — a required check that never starts blocks the merge. Pushes to main run it
+# too, so pull requests can restore the Rust cache main builds (caches don't cross pull requests).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same pull request makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Any `permissions:` block replaces the default token scopes, so grant per job.
+permissions: {}
+
+# Windows runners default to PowerShell, where `pnpm` returned immediately with no output and
+# exit code 0 while its work carried on in the background — every pnpm step silently did
+# nothing. Bash (Git Bash on Windows) waits for it and sees its exit code.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Full debug info makes the debug binary large enough that packing it into an .rpm took
+      # over twelve minutes. Nothing here runs a debugger; line numbers in panics are kept.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    strategy:
+      # One operating system failing says nothing about the others; let them all finish.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-latest
+            installers: macos/Hindsight.app dmg/*.dmg
+          - name: Linux
+            # The oldest supported Ubuntu, so the bundles link against a glibc old enough to run
+            # on most distributions. Kept in step with release.yml.
+            runner: ubuntu-22.04
+            installers: deb/*.deb rpm/*.rpm appimage/*.AppImage
+          - name: Linux, ARM
+            runner: ubuntu-22.04-arm
+            installers: deb/*.deb rpm/*.rpm appimage/*.AppImage
+          - name: Windows
+            runner: windows-latest
+            installers: msi/*.msi nsis/*-setup.exe
+          # Cross-compiled; 32-bit programs run on 64-bit Windows, so its tests still run.
+          - name: Windows, 32-bit
+            runner: windows-latest
+            target: i686-pc-windows-msvc
+            installers: msi/*.msi nsis/*-setup.exe
+          # A native ARM runner, so the tests run too. NSIS only: WiX, which builds the .msi,
+          # can't make ARM64 installers.
+          - name: Windows, ARM
+            runner: windows-11-arm
+            bundles: nsis
+            installers: nsis/*-setup.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        # WebKitGTK and friends for Tauri, ALSA headers for cpal, and xdg-open, which the
+        # AppImage bundles; the x64 runner image has it already, the ARM one doesn't.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev xdg-utils
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12
+          cache: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      # Keyed per target: jobs on the same runner OS would otherwise share one cache and
+      # overwrite each other's, leaving all but one to compile from scratch. Not the job's
+      # name: cache keys can't contain commas.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.runner }}-${{ matrix.target }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check the frontend
+        run: pnpm check
+
+      # The Rust crate embeds the built frontend at compile time, so it has to exist before
+      # `cargo test`.
+      - name: Build the frontend
+        run: pnpm build
+
+      # The recording core and the app; the spike has its own workflow.
+      - name: Test the Rust side
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo test --locked -p hindsight-core -p hindsight ${TARGET:+--target "$TARGET"}
+
+      # A debug build reuses what `cargo test` already compiled and still produces every bundle
+      # format, which is what catches a broken installer before a release does.
+      - name: Bundle the app
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLES: ${{ matrix.bundles }}
+        run: pnpm tauri build --debug ${TARGET:+--target "$TARGET"} ${BUNDLES:+--bundles "$BUNDLES"}
+
+      # A bundle step that silently does nothing still exits 0, so check its output exists.
+      - name: Check every installer was built
+        env:
+          TARGET: ${{ matrix.target }}
+          INSTALLERS: ${{ matrix.installers }}
+        run: |
+          # A cross-compiled build lands under its target's own directory.
+          # The workspace builds into the root target directory, not src-tauri's.
+          cd "target/${TARGET:+$TARGET/}debug/bundle"
+          status=0
+          for pattern in $INSTALLERS; do
+            if compgen -G "$pattern" > /dev/null; then
+              ls -ld $pattern
+            else
+              echo "::error::No installer matches $pattern"
+              status=1
+            fi
+          done
+          exit $status

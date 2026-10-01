@@ -65,7 +65,8 @@ jobs:
           key: ${{ matrix.runner }}
 
       - name: Test
-        run: cargo test --release --locked --workspace
+        # Only the crates this workflow measures; the app needs GTK, which build.yml installs.
+        run: cargo test --release --locked -p hindsight-core -p hindsight-spike
 
       - name: Benchmark three hours of synthetic speech
         run: |
