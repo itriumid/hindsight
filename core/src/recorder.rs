@@ -66,6 +66,22 @@ impl Snapshot {
     pub fn duration(&self) -> Duration {
         Duration::from_secs_f64(self.packets.len() as f64 * PACKET_SECONDS)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.packets.is_empty()
+    }
+}
+
+impl Drop for Snapshot {
+    /// A snapshot is decrypted audio; saved or discarded, it doesn't linger in freed memory.
+    fn drop(&mut self) {
+        for packet in &mut self.packets {
+            for byte in packet.iter_mut() {
+                unsafe { std::ptr::write_volatile(byte, 0) };
+            }
+        }
+        std::sync::atomic::compiler_fence(Ordering::SeqCst);
+    }
 }
 
 enum Command {
