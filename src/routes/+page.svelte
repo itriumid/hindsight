@@ -317,9 +317,11 @@
     overflow: hidden;
   }
 
+  /* How full the buffer is: a state, so the line color. Pastel pink on the light track is
+     1.4:1; the accent edge is 3.4:1, and the same as the accent in every other palette. */
   .fill {
     height: 100%;
-    background: var(--accent);
+    background: var(--accent-edge);
     transition: width var(--duration) var(--ease);
   }
 
