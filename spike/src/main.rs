@@ -134,7 +134,8 @@ fn time_timeline(ring: &Ring) {
 }
 
 /// Two conversations of synthetic speech with a quiet room between them, a third of the way in:
-/// what a morning of meetings looks like on the timeline. No real voices.
+/// what a morning of meetings looks like on the timeline. People take turns, each at their own
+/// loudness, with short pauses between. No real voices.
 fn demo(minutes: f64) {
     let frames = (minutes * 60.0 / PACKET_SECONDS) as usize;
     let quiet = (frames as f64 * 0.31) as usize..(frames as f64 * 0.43) as usize;
@@ -143,14 +144,27 @@ fn demo(minutes: f64) {
     let mut frame = [0f32; FRAME];
     let mut packet = [0u8; 256];
     let mut seed = 7u32;
+    let mut random = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    // A turn: how many frames are left in it, and how loud its speaker is (0 for a pause).
+    let (mut left, mut loudness) = (0usize, 1.0f32);
     let packets: Vec<Vec<u8>> = (0..frames)
         .map(|index| {
+            if left == 0 {
+                let pause = loudness > 0.0 && random() < 0.35;
+                let seconds = if pause { 1.0 + random() * 3.0 } else { 6.0 + random() * 19.0 };
+                left = (seconds / PACKET_SECONDS as f32) as usize;
+                loudness = if pause { 0.0 } else { 0.35 + random() * 0.9 };
+            }
+            left -= 1;
             voice.fill(&mut frame);
+            frame.iter_mut().for_each(|sample| *sample *= loudness.max(0.02));
             if quiet.contains(&index) {
                 // Room noise only, well below speech.
                 for sample in frame.iter_mut() {
-                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                    *sample = ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.004;
+                    *sample = (random() - 0.5) * 0.004;
                 }
             }
             let size = encoder.encode_float_to_slice(&frame, &mut packet).expect("encode");
