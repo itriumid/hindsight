@@ -103,6 +103,11 @@ Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exist
 
 - **Nothing records before the first-run screen is finished** (`welcomed` in settings), and
   Hindsight never runs twice (`tauri-plugin-single-instance`, registered first). Keep both.
+- **The timeline works on a frozen copy that stays encrypted** (`ring::Frozen`,
+  `core/src/timeline.rs`): ciphertext plus its own locked copy of the key, decrypted a packet at
+  a time into a buffer wiped straight after. Never decrypt it whole or into a `Snapshot`, and
+  never write it to a temporary file: listening goes through `Player::play_timeline`, from
+  memory. Dropping the `Timeline` wipes it.
 - **Clips are streamed, never decoded whole** (`core/src/clip.rs`, `ClipReader`; `player.rs`): a
   three-hour clip decoded at once would be about 2 GB. Window commands that take a clip path go
   through `clips::clip_in`, so they only ever touch visible `.opus` files in the clips folder.

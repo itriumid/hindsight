@@ -124,6 +124,77 @@ impl Drop for Ring {
     }
 }
 
+/// A frozen copy of the newest packets, for working on a stretch of audio (the timeline) while
+/// recording carries on. It stays encrypted, under its own copy of the buffer's key, and only
+/// ever decrypts one packet at a time into a buffer that's wiped straight after, so the audio is
+/// never held in the clear and no nonce is used for anything but decrypting what it was made for.
+///
+/// Only the key is locked in RAM: the packets are ciphertext, which may reach swap as safely as
+/// the buffer's own, and locking 22 MB on every freeze would keep growing the working set Windows
+/// reserves for the process.
+pub struct Frozen {
+    slots: Vec<u8>,
+    lengths: Vec<u8>,
+    slot_size: usize,
+    /// The sequence number of the oldest packet, which with the key decrypts it.
+    first: u64,
+    key: Box<[u8; 32]>,
+    pub key_locked: Locking,
+}
+
+impl Ring {
+    /// The newest `count` packets as they are, encrypted, oldest first.
+    pub fn freeze(&self, count: usize) -> Frozen {
+        let count = count.min(self.filled);
+        let first = self.pushed - count as u64;
+        let mut key = Box::new([0u8; 32]);
+        let key_locked = lock_region(&key[..]);
+        key.copy_from_slice(&self.key[..]);
+        let mut slots = vec![0; count * self.slot_size];
+        let mut lengths = vec![0; count];
+        for (index, (copy, length)) in slots.chunks_mut(self.slot_size).zip(lengths.iter_mut()).enumerate() {
+            let slot = ((first + index as u64) % self.capacity as u64) as usize;
+            let from = slot * self.slot_size;
+            copy.copy_from_slice(&self.slots[from..from + self.slot_size]);
+            *length = self.lengths[slot];
+        }
+        Frozen { slots, lengths, slot_size: self.slot_size, first, key, key_locked }
+    }
+}
+
+impl Frozen {
+    pub fn len(&self) -> usize {
+        self.lengths.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lengths.is_empty()
+    }
+
+    /// Hands packet `index` (0 is the oldest), decrypted, to `use_packet`, and wipes it as soon
+    /// as that returns.
+    pub fn with_packet<T>(&self, index: usize, use_packet: impl FnOnce(&[u8]) -> T) -> T {
+        let mut buffer = [0u8; u8::MAX as usize];
+        let length = self.lengths[index] as usize;
+        let start = index * self.slot_size;
+        buffer[..length].copy_from_slice(&self.slots[start..start + length]);
+        cipher(&self.key, self.first + index as u64).apply_keystream(&mut buffer[..length]);
+        let result = use_packet(&buffer[..length]);
+        wipe(&mut buffer);
+        result
+    }
+}
+
+impl Drop for Frozen {
+    fn drop(&mut self) {
+        self.slots.fill(0);
+        wipe(&mut self.key[..]);
+        if self.key_locked == Locking::Locked {
+            unlock_region(&self.key[..]);
+        }
+    }
+}
+
 fn cipher(key: &[u8; 32], sequence: u64) -> ChaCha20 {
     let mut nonce = [0u8; 12];
     nonce[..8].copy_from_slice(&sequence.to_le_bytes());
@@ -194,6 +265,34 @@ fn lock_region(_region: &[u8]) -> Locking {
     Locking::NotAttempted
 }
 
+/// Undoes `lock_region`, for memory that's about to be freed; on Windows that includes giving
+/// back the working set it added.
+#[cfg(unix)]
+fn unlock_region(region: &[u8]) {
+    unsafe { libc::munlock(region.as_ptr().cast(), region.len()) };
+}
+
+#[cfg(windows)]
+fn unlock_region(region: &[u8]) {
+    use windows_sys::Win32::System::Memory::VirtualUnlock;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
+    };
+    const SLACK: usize = 1 << 20;
+    unsafe {
+        VirtualUnlock(region.as_ptr().cast(), region.len());
+        let process = GetCurrentProcess();
+        let (mut minimum, mut maximum) = (0usize, 0usize);
+        if GetProcessWorkingSetSize(process, &mut minimum, &mut maximum) != 0 {
+            let grown = region.len() + SLACK;
+            SetProcessWorkingSetSize(process, minimum.saturating_sub(grown), maximum.saturating_sub(grown));
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn unlock_region(_region: &[u8]) {}
+
 impl Locking {
     fn and(self, other: Locking) -> Locking {
         match (self, other) {
@@ -261,6 +360,38 @@ mod tests {
         assert_ne!(*ring.key, old_key);
         ring.push(&[1, 2, 3]);
         assert_eq!(packets(&ring, 1), vec![vec![1, 2, 3]]);
+    }
+
+    #[test]
+    fn a_frozen_copy_holds_the_newest_packets_still_encrypted() {
+        let mut ring = Ring::new(4, 8);
+        for value in 1..=6u8 {
+            ring.push(&[value; 8]);
+        }
+        let frozen = ring.freeze(3);
+        assert_eq!(frozen.len(), 3);
+        let decrypted: Vec<Vec<u8>> = (0..3).map(|index| frozen.with_packet(index, <[u8]>::to_vec)).collect();
+        assert_eq!(decrypted, packets(&ring, 3));
+        // The copy is the ring's ciphertext, never the packets themselves.
+        for (index, slot) in frozen.slots.chunks(8).enumerate() {
+            assert_ne!(slot, decrypted[index].as_slice(), "packet {index} is stored in the clear");
+        }
+        // Asking for more than the ring holds freezes what there is.
+        assert_eq!(ring.freeze(100).len(), 4);
+    }
+
+    #[test]
+    fn a_frozen_copy_keeps_what_it_froze_while_recording_carries_on() {
+        let mut ring = Ring::new(3, 4);
+        ring.push(&[1; 4]);
+        ring.push(&[2; 4]);
+        let frozen = ring.freeze(2);
+        for value in 3..=9u8 {
+            ring.push(&[value; 4]); // wraps the ring twice over
+        }
+        ring.clear(); // and changes its key
+        let kept: Vec<Vec<u8>> = (0..2).map(|index| frozen.with_packet(index, <[u8]>::to_vec)).collect();
+        assert_eq!(kept, vec![vec![1; 4], vec![2; 4]]);
     }
 
     #[test]

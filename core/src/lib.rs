@@ -10,3 +10,4 @@ pub mod player;
 pub mod privacy;
 pub mod recorder;
 pub mod ring;
+pub mod timeline;

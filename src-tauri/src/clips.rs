@@ -121,7 +121,7 @@ pub fn stop_playback(playback: State<'_, Playback>) {
 pub fn playback_state(playback: State<'_, Playback>) -> PlaybackState {
     match playback.0.lock().expect("playback").as_ref() {
         Some(player) => PlaybackState {
-            path: Some(player.path().to_path_buf()),
+            path: player.path().map(Path::to_path_buf),
             position_seconds: player.position().as_secs_f64(),
             length_seconds: player.length().as_secs_f64(),
             playing: player.is_playing(),
@@ -154,7 +154,7 @@ pub async fn delete_clip(app: AppHandle, path: PathBuf) -> Result<bool, String> 
     {
         let playback = app.state::<Playback>();
         let mut current = playback.0.lock().expect("playback");
-        if current.as_ref().is_some_and(|player| player.path() == path) {
+        if current.as_ref().is_some_and(|player| player.path() == Some(path.as_path())) {
             current.take();
         }
     }

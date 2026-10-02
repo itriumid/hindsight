@@ -1,6 +1,6 @@
-//! Plays a saved clip through the default speakers, streaming: a thread decodes a packet at a
-//! time into about half a second of queue, and the audio output drains it. Even a three-hour
-//! clip is never decoded whole.
+//! Plays a saved clip, or the timeline, through the default speakers, streaming: a thread
+//! decodes a packet at a time into about half a second of queue, and the audio output drains it.
+//! Even three hours are never decoded whole.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,42 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::capture::Resampler;
 use crate::clip::{ClipReader, duration};
+use crate::timeline::Timeline;
+
+/// Something the player can play: a saved clip, or the timeline in memory.
+pub trait Source: Send + Sync + 'static {
+    fn length(&self) -> Duration;
+    /// Starts reading at `start`, on the exact sample.
+    fn open_at(self: Arc<Self>, start: Duration) -> Result<Box<dyn Reader>, String>;
+}
+
+/// Decodes a source a packet at a time.
+pub trait Reader: Send {
+    /// Decodes the next packet onto `out`; false once the source has ended.
+    fn next(&mut self, out: &mut Vec<f32>) -> Result<bool, String>;
+}
+
+impl Reader for ClipReader {
+    fn next(&mut self, out: &mut Vec<f32>) -> Result<bool, String> {
+        ClipReader::next(self, out)
+    }
+}
+
+/// A saved clip, as a source.
+struct ClipFile {
+    path: PathBuf,
+    length: Duration,
+}
+
+impl Source for ClipFile {
+    fn length(&self) -> Duration {
+        self.length
+    }
+
+    fn open_at(self: Arc<Self>, start: Duration) -> Result<Box<dyn Reader>, String> {
+        Ok(Box::new(ClipReader::open_at(&self.path, start)?))
+    }
+}
 
 enum Command {
     Play,
@@ -33,7 +69,8 @@ struct Progress {
 }
 
 pub struct Player {
-    path: PathBuf,
+    /// The clip being played; none for the timeline.
+    path: Option<PathBuf>,
     length: Duration,
     output_rate: u32,
     progress: Arc<Progress>,
@@ -42,31 +79,44 @@ pub struct Player {
 }
 
 impl Player {
-    /// Opens `path` and starts playing it straight away.
+    /// Opens the clip at `path` and starts playing it straight away.
     pub fn play(path: &Path) -> Result<Player, String> {
-        let length = duration(path)?;
+        let clip = Arc::new(ClipFile { path: path.to_path_buf(), length: duration(path)? });
+        Player::start(clip, Some(path.to_path_buf()), Duration::ZERO)
+    }
+
+    /// Starts playing the timeline from `start`. Playing again after the end starts from there
+    /// too.
+    pub fn play_timeline(timeline: Arc<Timeline>, start: Duration) -> Result<Player, String> {
+        let start = start.min(timeline.duration());
+        Player::start(timeline, None, start)
+    }
+
+    fn start(source: Arc<dyn Source>, path: Option<PathBuf>, start: Duration) -> Result<Player, String> {
+        let length = source.length();
         let device = cpal::default_host().default_output_device().ok_or("no speakers or headphones found")?;
         let config = device.default_output_config().map_err(|error| error.to_string())?;
         let output_rate = config.sample_rate();
         let progress = Arc::new(Progress::default());
         progress.playing.store(true, Ordering::Relaxed);
+        progress.base.store(samples_at(start), Ordering::Relaxed);
         let (commands, receiver) = mpsc::channel();
         let (ready_sender, ready) = mpsc::channel();
         let thread = {
-            let path = path.to_path_buf();
             let progress = Arc::clone(&progress);
             std::thread::Builder::new()
                 .name("hindsight-player".into())
-                .spawn(move || run(path, device, config, progress, receiver, ready_sender))
+                .spawn(move || run(source, start, device, config, progress, receiver, ready_sender))
                 .map_err(|error| error.to_string())?
         };
-        // The thread opens the output and the clip; wait for it to say whether that worked.
+        // The thread opens the output and the source; wait for it to say whether that worked.
         ready.recv().map_err(|_| "the player stopped before starting".to_string())??;
-        Ok(Player { path: path.to_path_buf(), length, output_rate, progress, commands: Some(commands), thread: Some(thread) })
+        Ok(Player { path, length, output_rate, progress, commands: Some(commands), thread: Some(thread) })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The clip being played, if it's a clip.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     pub fn length(&self) -> Duration {
@@ -121,8 +171,13 @@ fn queue_target(output_rate: u32) -> usize {
     output_rate as usize / 2
 }
 
+fn samples_at(time: Duration) -> u64 {
+    (time.as_nanos() * 48_000 / 1_000_000_000) as u64
+}
+
 fn run(
-    path: PathBuf,
+    source: Arc<dyn Source>,
+    origin: Duration,
     device: cpal::Device,
     config: cpal::SupportedStreamConfig,
     progress: Arc<Progress>,
@@ -176,7 +231,7 @@ fn run(
             }
         }
     };
-    let mut reader = match ClipReader::open(&path) {
+    let mut reader = match Arc::clone(&source).open_at(origin) {
         Ok(reader) => reader,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -197,8 +252,8 @@ fn run(
         match commands.recv_timeout(Duration::from_millis(20)) {
             Ok(Command::Play) => {
                 if progress.finished.swap(false, Ordering::Relaxed) {
-                    // Playing again after the end starts from the top.
-                    restart(&path, Duration::ZERO, &mut reader, &queue, &progress, &mut resampler, output_rate);
+                    // Playing again after the end starts from where it first started.
+                    restart(&source, origin, &mut reader, &queue, &progress, &mut resampler, output_rate);
                     ended = false;
                 }
                 progress.playing.store(true, Ordering::Relaxed);
@@ -209,7 +264,7 @@ fn run(
                 let _ = stream.pause();
             }
             Ok(Command::Seek(to)) => {
-                restart(&path, to, &mut reader, &queue, &progress, &mut resampler, output_rate);
+                restart(&source, to, &mut reader, &queue, &progress, &mut resampler, output_rate);
                 progress.finished.store(false, Ordering::Relaxed);
                 ended = false;
             }
@@ -242,19 +297,20 @@ fn run(
 }
 
 fn restart(
-    path: &Path,
+    source: &Arc<dyn Source>,
     to: Duration,
-    reader: &mut ClipReader,
+    reader: &mut Box<dyn Reader>,
     queue: &Mutex<VecDeque<f32>>,
     progress: &Progress,
     resampler: &mut Resampler,
     output_rate: u32,
 ) {
-    if let Ok(fresh) = ClipReader::open_at(path, to) {
+    if let Ok(fresh) = Arc::clone(source).open_at(to) {
         *reader = fresh;
         let mut queue = queue.lock().expect("queue");
+        queue.iter_mut().for_each(|sample| *sample = 0.0);
         queue.clear();
-        progress.base.store((to.as_nanos() * 48_000 / 1_000_000_000) as u64, Ordering::Relaxed);
+        progress.base.store(samples_at(to), Ordering::Relaxed);
         progress.frames.store(0, Ordering::Relaxed);
         *resampler = Resampler::new(48_000, output_rate);
     }
