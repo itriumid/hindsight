@@ -76,13 +76,26 @@ fn save(
     let Some(folder) = clips_folder_or_ask(app)? else {
         return Ok(None);
     };
-    std::fs::create_dir_all(&folder).map_err(|error| format!("couldn't create {}: {error}", folder.display()))?;
-    // Anything a crash left half-written goes first.
-    let _ = hindsight_core::clip::sweep_partials(&folder);
-    let path = clip_path(&folder, ends);
-    write(&path).map_err(|error| format!("couldn't write {}: {error}", path.display()))?;
+    let path = write_clip(&folder, ends, write)?;
     let file_name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     Ok(Some(Saved { path, file_name, seconds: length.as_secs_f64() }))
+}
+
+/// Saves happen one at a time. Each starts by sweeping half-written clips out of the folder, which
+/// would otherwise take one that another save is still writing (a shortcut pressed during a long
+/// timeline save lost the timeline's clip), and two saves in the same second would both pick the
+/// same free name. The audio is frozen before waiting, so waiting loses nothing.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+/// Writes a clip into `folder` through `write`, at a new path named for when it ends.
+fn write_clip(folder: &Path, ends: LocalTime, write: impl FnOnce(&Path) -> std::io::Result<usize>) -> Result<PathBuf, String> {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::fs::create_dir_all(folder).map_err(|error| format!("couldn't create {}: {error}", folder.display()))?;
+    // Anything a crash left half-written goes first.
+    let _ = hindsight_core::clip::sweep_partials(folder);
+    let path = clip_path(folder, ends);
+    write(&path).map_err(|error| format!("couldn't write {}: {error}", path.display()))?;
+    Ok(path)
 }
 
 /// Says how a save went, and tells the window about a new clip.
@@ -161,7 +174,38 @@ pub fn describe(seconds: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::describe;
+    use super::*;
+
+    const TIME: LocalTime = LocalTime { year: 2026, month: 10, day: 2, hour: 14, minute: 6, second: 53 };
+
+    /// A save still writing when another starts, as when the shortcut is pressed during a long
+    /// timeline save: both clips have to come out whole.
+    #[test]
+    fn overlapping_saves_both_keep_their_clips() {
+        let folder = std::env::temp_dir().join(format!("hindsight-overlap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let packets = || (0..50u8).map(|value| vec![value; 40]);
+        let slow = {
+            let folder = folder.clone();
+            std::thread::spawn(move || {
+                write_clip(&folder, TIME, |path| {
+                    // Each packet takes a while, so the clip is half-written for most of a second.
+                    let slowly = packets().inspect(|_| std::thread::sleep(Duration::from_millis(15)));
+                    hindsight_core::clip::write(path, slowly, 48_000)
+                })
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        let quick = write_clip(&folder, TIME, |path| hindsight_core::clip::write(path, packets(), 48_000));
+        let slow = slow.join().unwrap();
+
+        let (slow, quick) = (slow.expect("the slow save failed"), quick.expect("the quick save failed"));
+        assert_ne!(slow, quick, "both saves picked the same name");
+        for clip in [&slow, &quick] {
+            assert_eq!(hindsight_core::clip::duration(clip).unwrap(), Duration::from_millis(920), "{}", clip.display());
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 
     #[test]
     fn describes_lengths_in_plain_words() {
