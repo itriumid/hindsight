@@ -12,7 +12,10 @@ you save, nothing is written to disk, and nothing ever leaves your computer.
 **The application is early, but it works**: after a first-run screen, it records, lives in the
 menu bar, saves the last 1, 5 or 15 minutes as a clip, lists and plays your clips (with WAV export
 for apps that can't open Opus), and has settings for the microphone, how far back it goes (up to
-three hours), a save shortcut and launch at login. There's no release yet. The recording core (`core/`) underneath it is done and measured, through a
+three hours), a save shortcut and launch at login. Get it from the
+[latest release](https://github.com/itriumid/hindsight/releases/latest), or on macOS with
+`brew install --cask itriumid/tap/hindsight`; [itrium.id/hindsight](https://itrium.id/hindsight)
+has the details. The recording core (`core/`) underneath it is done and measured, through a
 spike (`spike/`) made to answer whether the idea holds up before any interface was designed.
 On macOS:
 
