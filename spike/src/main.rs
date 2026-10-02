@@ -99,6 +99,34 @@ fn bench(hours: f64, buffer_minutes: f64, save_minutes: f64) {
     println!("  = {:.3}% of one core while recording live", cpu / audio * 100.0);
     report_buffer(&ring, odd_sizes);
     save_and_check(&ring, save_minutes, 48_000, "bench");
+    time_timeline(&ring);
+}
+
+/// How long the timeline takes to open on everything the buffer holds: freezing it, the first
+/// loudness bar (what shows straight away), and all of them.
+fn time_timeline(ring: &Ring) {
+    const BARS: usize = 600;
+    let started = Instant::now();
+    let timeline = hindsight_core::timeline::Timeline::new(ring.freeze(ring.len()), 48_000);
+    let frozen = started.elapsed();
+    let started = Instant::now();
+    let mut first = None;
+    let mut bars = 0;
+    timeline
+        .levels(BARS, |_, _| {
+            first.get_or_insert(started.elapsed());
+            bars += 1;
+            true
+        })
+        .expect("levels");
+    let all = started.elapsed();
+    println!(
+        "timeline: {:.0} min frozen in {:.0} ms; first of {bars} loudness bars in {:.0} ms, all in {:.1} s",
+        timeline.duration().as_secs_f64() / 60.0,
+        frozen.as_secs_f64() * 1000.0,
+        first.unwrap_or_default().as_secs_f64() * 1000.0,
+        all.as_secs_f64()
+    );
 }
 
 fn report_buffer(ring: &Ring, odd_sizes: usize) {

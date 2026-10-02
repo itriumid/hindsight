@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::capture::{Audio, Heartbeat, Resampler, Role, choose_device, device_name, find_device, open_stream};
 use crate::encoding::{DEFAULT_COMPLEXITY, FRAME, PACKET_SECONDS, encoder, ring_for};
 use crate::ring::Ring;
+use crate::timeline::Timeline;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -131,6 +132,13 @@ impl Recorder {
         let count = (duration.as_secs_f64() / PACKET_SECONDS).round() as usize;
         let ring = self.ring.lock().expect("ring");
         Snapshot { packets: ring.newest(count).collect(), input_sample_rate: self.input_rate.load(Ordering::Relaxed) }
+    }
+
+    /// Everything the buffer holds, frozen and still encrypted, for the timeline. Recording
+    /// carries on into the buffer meanwhile.
+    pub fn freeze(&self) -> Timeline {
+        let ring = self.ring.lock().expect("ring");
+        Timeline::new(ring.freeze(ring.len()), self.input_rate.load(Ordering::Relaxed))
     }
 
     /// How much audio the buffer holds right now.
