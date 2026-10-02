@@ -69,6 +69,13 @@ fn status_line(event: &Event) -> String {
     }
 }
 
+/// Debug builds only: `HINDSIGHT_FILL=<clip.opus>` starts the buffer with that clip, as if it
+/// had just been recorded, to try the timeline with hours held without waiting hours.
+/// `cargo run -p hindsight-spike -- demo 72` makes one. Release builds never read it.
+fn start_with() -> Option<std::path::PathBuf> {
+    if cfg!(debug_assertions) { std::env::var_os("HINDSIGHT_FILL").map(Into::into) } else { None }
+}
+
 /// Starts recording with the saved settings, replacing a recorder that's already running. An
 /// open timeline closes: the buffer it was frozen from is being replaced.
 pub fn start(app: &AppHandle) {
@@ -79,6 +86,7 @@ pub fn start(app: &AppHandle) {
         primary: saved.microphone,
         fallback: saved.fallback_microphone,
         buffer_minutes: f64::from(saved.buffer_minutes),
+        start_with: start_with(),
         ..Settings::default()
     };
     let handle = app.clone();

@@ -14,6 +14,9 @@
 //!                                                     a listening test
 //!   seek    <clip.opus> <seconds>                     time opening a clip at a position
 //!   verify  <clip.opus>                               decode a clip and write a WAV beside it
+//!   demo    [minutes]                                 a synthetic clip shaped like two
+//!                                                     conversations with a quiet stretch between,
+//!                                                     for the app's HINDSIGHT_FILL (debug builds)
 //!
 //! Nothing here is the application; it's measurements to decide the application's design. The
 //! recording itself lives in `hindsight-core`, which the application uses too.
@@ -48,6 +51,7 @@ fn main() {
         Some("compare") => compare(number(1, 20.0), arguments.get(2)),
         Some("seek") => seek(Path::new(arguments.get(1).expect("seek needs a clip path")), number(2, 0.0)),
         Some("verify") => verify(Path::new(arguments.get(1).expect("verify needs a clip path"))),
+        Some("demo") => demo(number(1, 72.0)),
         _ => eprintln!("usage: hindsight-spike bench|record|verify (see src/main.rs)"),
     }
 }
@@ -127,6 +131,50 @@ fn time_timeline(ring: &Ring) {
         first.unwrap_or_default().as_secs_f64() * 1000.0,
         all.as_secs_f64()
     );
+}
+
+/// Two conversations of synthetic speech with a quiet room between them, a third of the way in:
+/// what a morning of meetings looks like on the timeline. People take turns, each at their own
+/// loudness, with short pauses between. No real voices.
+fn demo(minutes: f64) {
+    let frames = (minutes * 60.0 / PACKET_SECONDS) as usize;
+    let quiet = (frames as f64 * 0.31) as usize..(frames as f64 * 0.43) as usize;
+    let mut encoder = encoder();
+    let mut voice = SyntheticVoice::default();
+    let mut frame = [0f32; FRAME];
+    let mut packet = [0u8; 256];
+    let mut seed = 7u32;
+    let mut random = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    // A turn: how many frames are left in it, and how loud its speaker is (0 for a pause).
+    let (mut left, mut loudness) = (0usize, 1.0f32);
+    let packets: Vec<Vec<u8>> = (0..frames)
+        .map(|index| {
+            if left == 0 {
+                let pause = loudness > 0.0 && random() < 0.35;
+                let seconds = if pause { 1.0 + random() * 3.0 } else { 6.0 + random() * 19.0 };
+                left = (seconds / PACKET_SECONDS as f32) as usize;
+                loudness = if pause { 0.0 } else { 0.35 + random() * 0.9 };
+            }
+            left -= 1;
+            voice.fill(&mut frame);
+            frame.iter_mut().for_each(|sample| *sample *= loudness.max(0.02));
+            if quiet.contains(&index) {
+                // Room noise only, well below speech.
+                for sample in frame.iter_mut() {
+                    *sample = (random() - 0.5) * 0.004;
+                }
+            }
+            let size = encoder.encode_float_to_slice(&frame, &mut packet).expect("encode");
+            packet[..size].to_vec()
+        })
+        .collect();
+    let path = PathBuf::from(format!("demo-{minutes}-min.opus"));
+    clip::write(&path, packets.iter(), 48_000).expect("write clip");
+    println!("wrote {} ({} min of two synthetic conversations, quiet from {:.0} to {:.0} min)", path.display(), minutes, quiet.start as f64 * PACKET_SECONDS / 60.0, quiet.end as f64 * PACKET_SECONDS / 60.0);
+    println!("try it: HINDSIGHT_FILL=$PWD/{} pnpm tauri dev", path.display());
 }
 
 fn report_buffer(ring: &Ring, odd_sizes: usize) {
@@ -239,6 +287,7 @@ fn record(seconds: f64, buffer_minutes: f64, save_minutes: f64, primary: Option<
         buffer_minutes,
         complexity: setting("HINDSIGHT_COMPLEXITY").map_or(DEFAULT_COMPLEXITY, |value| value as u8),
         buffer_frames: setting("HINDSIGHT_BUFFER_FRAMES"),
+        start_with: None,
     };
     let cpu_before = cpu_seconds();
     let started = Instant::now();
