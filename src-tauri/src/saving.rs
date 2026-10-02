@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use hindsight_core::naming::{LocalTime, clip_path};
 use hindsight_core::timeline::Timeline;
@@ -45,7 +45,7 @@ pub fn save_last(app: &AppHandle, minutes: u32) {
             notify(&app, "Nothing to save yet", "Hindsight hasn't recorded anything yet.");
             return;
         };
-        let saved = save(&app, LocalTime::now(), snapshot.duration(), |path| {
+        let saved = save(&app, Duration::ZERO, snapshot.duration(), |path| {
             hindsight_core::clip::write(path, snapshot.packets.iter(), snapshot.input_sample_rate)
         });
         announce(&app, saved, |seconds| format!("Saved the last {}", describe(seconds)));
@@ -58,7 +58,7 @@ pub fn save_last(app: &AppHandle, minutes: u32) {
 pub fn save_range(app: &AppHandle, timeline: Arc<Timeline>, start: Duration, end: Duration, ended_ago: Duration) {
     let app = app.clone();
     std::thread::spawn(move || {
-        let saved = save(&app, LocalTime::before_now(ended_ago), end.saturating_sub(start), |path| {
+        let saved = save(&app, ended_ago, end.saturating_sub(start), |path| {
             timeline.save(path, start, end)
         });
         announce(&app, saved, |seconds| format!("Saved {}", describe(seconds)));
@@ -69,14 +69,14 @@ pub fn save_range(app: &AppHandle, timeline: Arc<Timeline>, start: Duration, end
 /// to a new path in it, named for the moment the clip ends.
 fn save(
     app: &AppHandle,
-    ends: LocalTime,
+    ended_ago: Duration,
     length: Duration,
     write: impl FnOnce(&Path) -> std::io::Result<usize>,
 ) -> Result<Option<Saved>, String> {
     let Some(folder) = clips_folder_or_ask(app)? else {
         return Ok(None);
     };
-    let path = write_clip(&folder, ends, write)?;
+    let path = write_clip(&folder, ended_ago, write)?;
     let file_name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     Ok(Some(Saved { path, file_name, seconds: length.as_secs_f64() }))
 }
@@ -87,14 +87,20 @@ fn save(
 /// same free name. The audio is frozen before waiting, so waiting loses nothing.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-/// Writes a clip into `folder` through `write`, at a new path named for when it ends.
-fn write_clip(folder: &Path, ends: LocalTime, write: impl FnOnce(&Path) -> std::io::Result<usize>) -> Result<PathBuf, String> {
+/// Writes a clip into `folder` through `write`, at a new path named for when it ends: `ended_ago`
+/// before now. Its modification time says the same, so the Clips list, which sorts by it, and
+/// the file manager agree with the name, even for a stretch of the timeline that ended a while
+/// before it was saved.
+fn write_clip(folder: &Path, ended_ago: Duration, write: impl FnOnce(&Path) -> std::io::Result<usize>) -> Result<PathBuf, String> {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     std::fs::create_dir_all(folder).map_err(|error| format!("couldn't create {}: {error}", folder.display()))?;
     // Anything a crash left half-written goes first.
     let _ = hindsight_core::clip::sweep_partials(folder);
-    let path = clip_path(folder, ends);
+    let ended = SystemTime::now() - ended_ago;
+    let path = clip_path(folder, LocalTime::before_now(ended_ago));
     write(&path).map_err(|error| format!("couldn't write {}: {error}", path.display()))?;
+    // Only a date: if the system won't set it, the clip is still saved.
+    let _ = std::fs::File::options().write(true).open(&path).and_then(|file| file.set_modified(ended));
     Ok(path)
 }
 
@@ -176,8 +182,6 @@ pub fn describe(seconds: f64) -> String {
 mod tests {
     use super::*;
 
-    const TIME: LocalTime = LocalTime { year: 2026, month: 10, day: 2, hour: 14, minute: 6, second: 53 };
-
     /// A save still writing when another starts, as when the shortcut is pressed during a long
     /// timeline save: both clips have to come out whole.
     #[test]
@@ -188,7 +192,7 @@ mod tests {
         let slow = {
             let folder = folder.clone();
             std::thread::spawn(move || {
-                write_clip(&folder, TIME, |path| {
+                write_clip(&folder, Duration::ZERO, |path| {
                     // Each packet takes a while, so the clip is half-written for most of a second.
                     let slowly = packets().inspect(|_| std::thread::sleep(Duration::from_millis(15)));
                     hindsight_core::clip::write(path, slowly, 48_000)
@@ -196,7 +200,7 @@ mod tests {
             })
         };
         std::thread::sleep(Duration::from_millis(200));
-        let quick = write_clip(&folder, TIME, |path| hindsight_core::clip::write(path, packets(), 48_000));
+        let quick = write_clip(&folder, Duration::ZERO, |path| hindsight_core::clip::write(path, packets(), 48_000));
         let slow = slow.join().unwrap();
 
         let (slow, quick) = (slow.expect("the slow save failed"), quick.expect("the quick save failed"));
@@ -204,6 +208,26 @@ mod tests {
         for clip in [&slow, &quick] {
             assert_eq!(hindsight_core::clip::duration(clip).unwrap(), Duration::from_millis(920), "{}", clip.display());
         }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    /// A stretch of the timeline that ended 40 minutes ago is named and dated for then, not for
+    /// when it was saved.
+    #[test]
+    fn a_clip_is_dated_for_when_it_ends() {
+        let folder = std::env::temp_dir().join(format!("hindsight-dated-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let ago = Duration::from_secs(40 * 60);
+        let packets = (0..10u8).map(|value| vec![value; 40]);
+        let path = write_clip(&folder, ago, |path| hindsight_core::clip::write(path, packets, 48_000)).unwrap();
+
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let off = SystemTime::now().duration_since(modified).unwrap().abs_diff(ago);
+        assert!(off < Duration::from_secs(5), "dated {off:?} away from when it ended");
+        let named = hindsight_core::naming::clip_stem(LocalTime::before_now(ago));
+        let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        // The two readings of the clock can straddle a second.
+        assert_eq!(name[..name.len() - 2], named[..named.len() - 2], "{name} isn't named for 40 minutes ago");
         std::fs::remove_dir_all(folder).unwrap();
     }
 
