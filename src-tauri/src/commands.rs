@@ -10,7 +10,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::data::RemoveOnExit;
 use crate::settings::{LONGEST_BUFFER_MINUTES, SHORTEST_BUFFER_MINUTES, Settings, SettingsStore, reachable};
-use crate::{hotkeys, recording, saving, tray};
+use crate::{hotkeys, launch_at_login, recording, saving, tray};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,22 +95,15 @@ pub fn set_presence(app: AppHandle, menu_bar: bool, dock: bool) -> Result<Settin
 
 #[tauri::command]
 pub fn set_launch_at_login(app: AppHandle, on: bool) -> Result<SettingsView, String> {
-    apply_launch_at_login(&app, on)?;
+    launch_at_login::set(&app, on)?;
     Ok(view(&app))
-}
-
-fn apply_launch_at_login(app: &AppHandle, on: bool) -> Result<(), String> {
-    let manager = app.autolaunch();
-    if on { manager.enable() } else { manager.disable() }.map_err(|error| format!("couldn't change launch at login: {error}"))?;
-    app.state::<SettingsStore>().update(|settings| settings.launch_at_login = on)?;
-    Ok(())
 }
 
 /// The first-run screen's "Start recording": nothing records before this.
 #[tauri::command]
 pub fn finish_welcome(app: AppHandle, launch_at_login: bool, clips_folder: Option<PathBuf>) -> Result<SettingsView, String> {
     if launch_at_login {
-        apply_launch_at_login(&app, true)?;
+        launch_at_login::set(&app, true)?;
     }
     app.state::<SettingsStore>().update(|settings| {
         settings.welcomed = true;

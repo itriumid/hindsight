@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{AppHandle, Manager};
-use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 /// Set when the person asked to remove everything; acted on at exit.
@@ -42,7 +41,7 @@ pub fn data_folders(app: &AppHandle) -> Vec<PathBuf> {
 
 /// Things outside those folders that Hindsight set up: launch at login and the shortcut.
 pub fn undo_system_changes(app: &AppHandle) {
-    let _ = app.autolaunch().disable();
+    crate::launch_at_login::turn_off(app);
     let _ = app.global_shortcut().unregister_all();
 }
 

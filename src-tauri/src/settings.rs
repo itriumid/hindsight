@@ -28,6 +28,9 @@ pub struct Settings {
     pub show_in_dock: bool,
     pub show_in_menu_bar: bool,
     pub launch_at_login: bool,
+    /// The copy of Hindsight that launch at login starts, so a copy that moved or was updated
+    /// can tell it's no longer the one and point it at itself.
+    pub launch_at_login_target: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -43,6 +46,7 @@ impl Default for Settings {
             show_in_dock: false,
             show_in_menu_bar: true,
             launch_at_login: false,
+            launch_at_login_target: None,
         }
     }
 }
