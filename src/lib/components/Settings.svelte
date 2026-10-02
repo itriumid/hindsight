@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { PalettePicker, ThemeSwitcher } from "@itrium/palettes";
   import HotkeyRecorder from "$lib/components/HotkeyRecorder.svelte";
+  import { theme } from "$lib/theme";
 
   export interface SettingsView {
     welcomed: boolean;
@@ -192,6 +194,14 @@
   </section>
 
   <section>
+    <h2>Colors</h2>
+    <div class="row">
+      <PalettePicker {theme} label="Palette" />
+      <ThemeSwitcher {theme} />
+    </div>
+  </section>
+
+  <section>
     <h2>Your data</h2>
     <p>
       Hindsight keeps its settings in its own folder. Removing them also turns off launch at login
@@ -255,7 +265,7 @@
 
   input[type="checkbox"],
   input[type="radio"] {
-    accent-color: var(--accent);
+    accent-color: var(--accent-edge);
   }
 
   .choices {

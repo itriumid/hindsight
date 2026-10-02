@@ -86,6 +86,7 @@ Opus.
 | Run the application | `pnpm tauri dev` |
 | Type-check the frontend | `pnpm check` |
 | Build the frontend | `pnpm build` |
+| Check every palette's color contrast | `pnpm test` |
 | Build the Rust side | `cargo build --release --workspace` |
 | Unit tests | `cargo test --workspace` |
 | Benchmark three hours of synthetic speech | `cargo run --release -p hindsight-spike -- bench 3 180 15` |
@@ -94,7 +95,7 @@ Opus.
 | Blind listening test of encoder settings | `cargo run --release -p hindsight-spike -- compare 20 [microphone]` |
 | Time opening a clip at a position | `cargo run --release -p hindsight-spike -- seek <clip.opus> <seconds>` |
 
-Before calling a change done, run `pnpm check`, `pnpm build` and `cargo test --workspace`.
+Before calling a change done, run `pnpm check`, `pnpm test`, `pnpm build` and `cargo test --workspace`.
 
 CI: `build.yml` builds, tests and bundles the application for six targets (macOS universal,
 Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exists;
@@ -115,6 +116,12 @@ Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exist
   agent again means updating the cask's `uninstall launchctl:` and `zap` in the tap. "Remove all
   Hindsight data" (`data.rs`) turns it off and deletes Hindsight's own folders as the app exits,
   never the clips.
+- **Colors come from `@itrium/palettes`** (shared with Honk): its stylesheet sets the color
+  tokens, `src/app.css` only adds spacing, radii and fonts. Never define a color token here;
+  change it in the package. Lines and `accent-color` use `--accent-edge`, fills `--accent`;
+  `tests/palettes.test.mjs` (`pnpm test`) checks every palette as Hindsight uses it, the lines,
+  and that `src/app.html` applies the saved choice (`hindsight:theme`, `hindsight:palette`)
+  before the first paint.
 - **The menu bar glyph** is `branding/tray-template.svg`, rendered to
   `src-tauri/icons/tray-template@2x.png` at 44 by 44 (black on transparent; macOS tints it).
   The app icon is `branding/icon.svg`, rendered with `pnpm tauri icon`.

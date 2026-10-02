@@ -40,6 +40,7 @@ touches one side:
 | What | Command |
 | --- | --- |
 | Type-check the frontend | `pnpm check` |
+| Check every palette's color contrast | `pnpm test` |
 | Build the frontend | `pnpm build` |
 | Test the Rust side | `cargo test --workspace` |
 

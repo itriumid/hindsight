@@ -4,6 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Hindsight</title>
+    <script>
+      // Applies the saved theme and palette before the first paint, so the window never
+      // flashes the default colors. src/lib/theme.ts owns these settings afterwards. A palette
+      // the stylesheet doesn't know falls back to Rhodonite.
+      try {
+        const root = document.documentElement;
+        const theme = localStorage.getItem("hindsight:theme");
+        if (theme === "light" || theme === "dark") root.dataset.theme = theme;
+        const palette = localStorage.getItem("hindsight:palette");
+        if (palette && palette !== "rhodonite") root.dataset.palette = palette;
+      } catch {}
+    </script>
     %sveltekit.head%
   </head>
   <body>
