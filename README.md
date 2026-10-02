@@ -10,7 +10,8 @@ you save, nothing is written to disk, and nothing ever leaves your computer.
 ## Status
 
 **The application is early, but it works**: after a first-run screen, it records, lives in the
-menu bar, saves the last 1, 5 or 15 minutes as a clip, lists and plays your clips (with WAV export
+menu bar, saves the last 1, 5 or 15 minutes as a clip (or any stretch you choose on a timeline of
+everything it holds), lists and plays your clips (with WAV export
 for apps that can't open Opus), and has settings for the microphone, how far back it goes (up to
 three hours), a save shortcut and launch at login. Get it from the
 [latest release](https://github.com/itriumid/hindsight/releases/latest), or on macOS with

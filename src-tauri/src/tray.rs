@@ -4,7 +4,7 @@
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::saving;
 
@@ -20,6 +20,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let save_one = MenuItem::with_id(app, "save-1", "Save the last minute", true, None::<&str>)?;
     let save_five = MenuItem::with_id(app, "save-5", "Save the last 5 minutes", true, None::<&str>)?;
     let save_fifteen = MenuItem::with_id(app, "save-15", "Save the last 15 minutes", true, None::<&str>)?;
+    let choose = MenuItem::with_id(app, "choose", "Choose what to save…", true, None::<&str>)?;
     let show_last = MenuItem::with_id(app, "show-last", "Show the last clip in its folder", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Hindsight", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Hindsight", true, None::<&str>)?;
@@ -32,6 +33,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &save_one,
             &save_five,
             &save_fifteen,
+            &choose,
             &PredefinedMenuItem::separator(app)?,
             &show_last,
             &open,
@@ -57,6 +59,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "save-1" => saving::save_last(app, 1),
             "save-5" => saving::save_last(app, 5),
             "save-15" => saving::save_last(app, 15),
+            "choose" => {
+                show_main_window(app);
+                let _ = app.emit("choose-what-to-save", ());
+            }
             "show-last" => saving::reveal_last(app),
             "open" => show_main_window(app),
             "quit" => app.exit(0),
