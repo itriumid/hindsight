@@ -4,6 +4,7 @@
   import { listen } from "@tauri-apps/api/event";
   import Clips from "$lib/components/Clips.svelte";
   import Settings, { type SettingsView } from "$lib/components/Settings.svelte";
+  import Timeline from "$lib/components/Timeline.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
 
   interface Status {
@@ -25,7 +26,14 @@
   }
 
   let settings = $state<SettingsView | null>(null);
-  let view = $state<"home" | "settings">("home");
+  let view = $state<"home" | "settings" | "timeline">("home");
+  /** Counts openings of the timeline, so opening it again freezes what's held now. */
+  let opened = $state(0);
+
+  function choose() {
+    view = "timeline";
+    opened += 1;
+  }
   let status = $state<Status | null>(null);
   let folder = $state<string | null>(null);
   let waiting = $state<number | null>(null);
@@ -81,6 +89,8 @@
       history = [{ at: new Date(), text: `Saved ${payload.fileName}` }, ...history].slice(0, 6);
       invoke<string | null>("clips_folder").then((value) => (folder = value));
     });
+    // "Choose what to save…" in the menu bar opens the window on the timeline.
+    const stopChoose = listen("choose-what-to-save", choose);
     const stop = listen<Notice>("recorder", ({ payload }) => {
       waiting = payload.kind === "waiting" ? payload.retryInSeconds : null;
       history = [{ at: new Date(), text: describe(payload) }, ...history].slice(0, 6);
@@ -90,6 +100,7 @@
       clearInterval(timer);
       stop.then((unlisten) => unlisten());
       stopSaved.then((unlisten) => unlisten());
+      stopChoose.then((unlisten) => unlisten());
     };
   });
 </script>
@@ -99,14 +110,20 @@
 {:else if settings}
 <main>
   <header>
-    <h1>{view === "home" ? "Hindsight" : "Settings"}</h1>
-    <button class="link" onclick={() => (view = view === "home" ? "settings" : "home")}>
-      {view === "home" ? "Settings" : "Done"}
-    </button>
+    <h1>{view === "home" ? "Hindsight" : view === "settings" ? "Settings" : "Choose what to save"}</h1>
+    {#if view !== "timeline"}
+      <button class="link" onclick={() => (view = view === "home" ? "settings" : "home")}>
+        {view === "home" ? "Settings" : "Done"}
+      </button>
+    {/if}
   </header>
 
   {#if view === "settings"}
     <Settings bind:settings />
+  {:else if view === "timeline"}
+    {#key opened}
+      <Timeline ondone={() => (view = "home")} />
+    {/key}
   {:else}
 
   {#if status?.microphone}
@@ -156,8 +173,12 @@
       <button onclick={() => save(1)}>Last minute</button>
       <button onclick={() => save(5)}>Last 5 minutes</button>
       <button class="primary" onclick={() => save(15)}>Last 15 minutes</button>
+      <button onclick={choose}>Choose…</button>
     </div>
-    <p class="hint">Or from the menu bar icon, without opening this window.</p>
+    <p class="hint">
+      Or from the menu bar icon, without opening this window. Choose… goes back as far as Hindsight
+      holds, to save exactly what you need.
+    </p>
   </section>
 
   <Clips {folder} />

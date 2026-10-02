@@ -9,12 +9,13 @@ mod launch_at_login;
 mod recording;
 mod saving;
 mod settings;
+mod timeline;
 mod tray;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
 use settings::SettingsStore;
 
@@ -70,6 +71,7 @@ pub fn run() {
         .manage(saving::LastClip::default())
         .manage(clips::Playback::default())
         .manage(data::RemoveOnExit::default())
+        .manage(timeline::OpenTimeline::default())
         .setup(|app| {
             let handle = app.handle();
             app.manage(SettingsStore::load(handle)?);
@@ -121,13 +123,20 @@ pub fn run() {
             clips::playback_state,
             clips::reveal_clip,
             clips::delete_clip,
-            clips::export_clip
+            clips::export_clip,
+            timeline::open_timeline,
+            timeline::listen_timeline,
+            timeline::save_timeline,
+            timeline::close_timeline
         ])
         .on_window_event(|window, event| {
             // Closing the window keeps Hindsight recording in the menu bar; Quit is in the menu.
+            // It also closes the timeline, so a frozen copy is never left behind.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                timeline::close(window.app_handle());
+                let _ = window.emit("timeline-closed", ());
             }
         })
         .build(tauri::generate_context!())

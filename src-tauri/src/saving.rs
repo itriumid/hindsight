@@ -3,11 +3,11 @@
 //! atomically, and say so.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hindsight_core::naming::{LocalTime, clip_path};
-use hindsight_core::recorder::Snapshot;
+use hindsight_core::timeline::Timeline;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -45,32 +45,58 @@ pub fn save_last(app: &AppHandle, minutes: u32) {
             notify(&app, "Nothing to save yet", "Hindsight hasn't recorded anything yet.");
             return;
         };
-        match save(&app, &snapshot) {
-            Ok(Some(saved)) => {
-                *app.state::<LastClip>().0.lock().expect("last clip") = Some(saved.path.clone());
-                tray::enable_show_last(&app);
-                notify(&app, &format!("Saved the last {}", describe(saved.seconds)), &saved.file_name);
-                let _ = app.emit("saved", saved);
-            }
-            Ok(None) => {} // discarded on purpose
-            Err(error) => notify(&app, "Couldn't save the clip", &error),
-        }
+        let saved = save(&app, LocalTime::now(), snapshot.duration(), |path| {
+            hindsight_core::clip::write(path, snapshot.packets.iter(), snapshot.input_sample_rate)
+        });
+        announce(&app, saved, |seconds| format!("Saved the last {}", describe(seconds)));
         // The snapshot, decrypted audio, wipes itself here.
     });
 }
 
-fn save(app: &AppHandle, snapshot: &Snapshot) -> Result<Option<Saved>, String> {
+/// Saves `start` to `end` of the timeline, without blocking the caller. The clip is named for
+/// the moment it ends: `ended_ago` before now.
+pub fn save_range(app: &AppHandle, timeline: Arc<Timeline>, start: Duration, end: Duration, ended_ago: Duration) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let saved = save(&app, LocalTime::before_now(ended_ago), end.saturating_sub(start), |path| {
+            timeline.save(path, start, end)
+        });
+        announce(&app, saved, |seconds| format!("Saved {}", describe(seconds)));
+    });
+}
+
+/// Makes sure there's a folder (asking on the very first save), then has `write` write the clip
+/// to a new path in it, named for the moment the clip ends.
+fn save(
+    app: &AppHandle,
+    ends: LocalTime,
+    length: Duration,
+    write: impl FnOnce(&Path) -> std::io::Result<usize>,
+) -> Result<Option<Saved>, String> {
     let Some(folder) = clips_folder_or_ask(app)? else {
         return Ok(None);
     };
     std::fs::create_dir_all(&folder).map_err(|error| format!("couldn't create {}: {error}", folder.display()))?;
     // Anything a crash left half-written goes first.
     let _ = hindsight_core::clip::sweep_partials(&folder);
-    let path = clip_path(&folder, LocalTime::now());
-    hindsight_core::clip::write(&path, snapshot.packets.iter(), snapshot.input_sample_rate)
-        .map_err(|error| format!("couldn't write {}: {error}", path.display()))?;
+    let path = clip_path(&folder, ends);
+    write(&path).map_err(|error| format!("couldn't write {}: {error}", path.display()))?;
     let file_name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    Ok(Some(Saved { path, file_name, seconds: snapshot.duration().as_secs_f64() }))
+    Ok(Some(Saved { path, file_name, seconds: length.as_secs_f64() }))
+}
+
+/// Says how a save went, and tells the window about a new clip.
+fn announce(app: &AppHandle, saved: Result<Option<Saved>, String>, title: impl FnOnce(f64) -> String) {
+    match saved {
+        Ok(Some(saved)) => {
+            *app.state::<LastClip>().0.lock().expect("last clip") = Some(saved.path.clone());
+            tray::enable_show_last(app);
+            notify(app, &title(saved.seconds), &saved.file_name);
+            let _ = app.emit("saved", saved);
+        }
+        Ok(None) => {} // discarded on purpose
+        Err(error) => notify(app, "Couldn't save the clip", &error),
+    }
 }
 
 /// The chosen clips folder; on the first save, asks for one. `None` means the person chose to

@@ -69,8 +69,11 @@ fn status_line(event: &Event) -> String {
     }
 }
 
-/// Starts recording with the saved settings, replacing a recorder that's already running.
+/// Starts recording with the saved settings, replacing a recorder that's already running. An
+/// open timeline closes: the buffer it was frozen from is being replaced.
 pub fn start(app: &AppHandle) {
+    crate::timeline::close(app);
+    let _ = app.emit("timeline-closed", ());
     let saved = app.state::<SettingsStore>().get();
     let settings = Settings {
         primary: saved.microphone,
