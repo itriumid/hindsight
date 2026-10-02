@@ -5,6 +5,7 @@ mod clips;
 mod commands;
 mod data;
 mod hotkeys;
+mod launch_at_login;
 mod recording;
 mod saving;
 mod settings;
@@ -14,12 +15,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
-use tauri_plugin_autostart::MacosLauncher;
 
 use settings::SettingsStore;
-
-/// Launch at login starts Hindsight with this, so it starts quietly in the menu bar.
-const BACKGROUND: &str = "--background";
 
 #[tauri::command]
 fn clips_folder(settings: State<'_, SettingsStore>) -> Option<PathBuf> {
@@ -60,7 +57,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _arguments, _directory| {
             tray::show_main_window(app);
         }))
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![BACKGROUND])))
+        .plugin(launch_at_login::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -76,6 +73,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
             app.manage(SettingsStore::load(handle)?);
+            launch_at_login::keep_current(handle);
             let settings = app.state::<SettingsStore>().get();
 
             #[cfg(target_os = "macos")]
@@ -93,7 +91,7 @@ pub fn run() {
             }
             recording::keep_menu_current(handle);
 
-            let quietly = std::env::args().any(|argument| argument == BACKGROUND);
+            let quietly = std::env::args().any(|argument| argument == launch_at_login::BACKGROUND);
             if !settings.welcomed || !quietly {
                 tray::show_main_window(handle);
             }

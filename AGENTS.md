@@ -107,9 +107,14 @@ Linux x64 and ARM, Windows x64, 32-bit and ARM) and checks every installer exist
   through `clips::clip_in`, so they only ever touch visible `.opus` files in the clips folder.
 - **Settings that could strand the window** go through `settings::reachable`: on macOS the menu
   bar icon and the Dock icon can't both be off.
-- **Launch at login** uses a LaunchAgent (`~/Library/LaunchAgents`) on macOS, not AppleScript,
-  which would ask to control System Events. "Remove all Hindsight data" (`data.rs`) turns it off
-  and deletes Hindsight's own folders as the app exits, never the clips.
+- **Launch at login** lives in `launch_at_login.rs`. On macOS it's a LaunchAgent named after the
+  identifier (`~/Library/LaunchAgents/id.itrium.hindsight.plist`), not AppleScript, which would
+  ask to control System Events; 0.1.0's `Hindsight.plist` is moved to that name at start-up.
+  The entry holds an absolute path, so at start-up a release build points it at itself when it
+  starts another copy; debug builds never do, so a test build can't take it over. Renaming the
+  agent again means updating the cask's `uninstall launchctl:` and `zap` in the tap. "Remove all
+  Hindsight data" (`data.rs`) turns it off and deletes Hindsight's own folders as the app exits,
+  never the clips.
 - **The menu bar glyph** is `branding/tray-template.svg`, rendered to
   `src-tauri/icons/tray-template@2x.png` at 44 by 44 (black on transparent; macOS tints it).
   The app icon is `branding/icon.svg`, rendered with `pnpm tauri icon`.
