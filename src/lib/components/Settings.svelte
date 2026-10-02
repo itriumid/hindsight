@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { PalettePicker, ThemeSwitcher } from "@itrium/palettes";
   import HotkeyRecorder from "$lib/components/HotkeyRecorder.svelte";
+  import { theme } from "$lib/theme";
 
   export interface SettingsView {
     welcomed: boolean;
@@ -189,6 +191,14 @@
       />
       Start Hindsight when I log in
     </label>
+  </section>
+
+  <section>
+    <h2>Colors</h2>
+    <div class="row">
+      <PalettePicker {theme} label="Palette" />
+      <ThemeSwitcher {theme} />
+    </div>
   </section>
 
   <section>

@@ -11,6 +11,9 @@ importers:
 
   .:
     dependencies:
+      '@itrium/palettes':
+        specifier: 0.1.0
+        version: 0.1.0(svelte@5.57.1)
       '@tauri-apps/api':
         specifier: ^2.12.1
         version: 2.12.1
@@ -41,6 +44,11 @@ importers:
         version: 8.3.1
 
 packages:
+
+  '@itrium/palettes@0.1.0':
+    resolution: {integrity: sha512-XZo3gsngaKLAMARvlofErlFQbPl7KdGsrvOf9skIBiTf3v6nuidntRAYU7t8Fg6S8UfyMo3kBAn5LJVuDNyN6w==}
+    peerDependencies:
+      svelte: ^5.0.0
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -571,6 +579,10 @@ packages:
     resolution: {integrity: sha512-msJxIvYDYcoNL+PJsu+7qmpDWsYmAxTY+2TNYXXF0hzBzBk0BMecOqDOG/EckUoKCuKwObfbugIl8QpqHDXeFA==}
 
 snapshots:
+
+  '@itrium/palettes@0.1.0(svelte@5.57.1)':
+    dependencies:
+      svelte: 5.57.1
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:

@@ -33,6 +33,18 @@ The same benchmark runs on macOS, Linux and Windows (Intel and ARM) on every cha
 One thing no application can control: hibernation writes all of memory to disk, locked memory
 included. Turn on your disk's encryption (FileVault, BitLocker, or LUKS) to cover that.
 
+## Colors
+
+Hindsight offers four palettes under **Settings › Colors**. Rhodonite, Itrium's own, is the
+default. The other three are [Catppuccin](https://catppuccin.com) flavors (Mocha, Macchiato and
+Frappé), each paired with Catppuccin Latte in light mode. The theme (System, Light or Dark)
+picks the light or dark version of whichever palette is chosen.
+
+The palettes come from [`@itrium/palettes`](https://github.com/itriumid/palettes), shared with
+[Honk](https://github.com/itriumid/honk), which also has the colors and how they were adapted.
+Every one meets level AA of the Web Content Accessibility Guidelines in every theme, as
+Hindsight uses it: `pnpm test` checks that, and CI runs it.
+
 ## Recording people
 
 Recording a conversation can need the consent of everyone in it, and the rules differ by
