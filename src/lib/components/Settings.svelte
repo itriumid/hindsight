@@ -255,7 +255,7 @@
 
   input[type="checkbox"],
   input[type="radio"] {
-    accent-color: var(--accent);
+    accent-color: var(--accent-edge);
   }
 
   .choices {

@@ -271,6 +271,6 @@
 
   input[type="range"] {
     flex: 1;
-    accent-color: var(--accent);
+    accent-color: var(--accent-edge);
   }
 </style>

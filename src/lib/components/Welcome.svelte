@@ -130,7 +130,7 @@
   }
 
   input[type="checkbox"] {
-    accent-color: var(--accent);
+    accent-color: var(--accent-edge);
   }
 
   .folder {
