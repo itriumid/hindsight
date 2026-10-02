@@ -94,6 +94,7 @@ Opus.
 | Record from the microphone | `cargo run --release -p hindsight-spike -- record 30 180 0.5 [microphone] [fallback]` |
 | Blind listening test of encoder settings | `cargo run --release -p hindsight-spike -- compare 20 [microphone]` |
 | Time opening a clip at a position | `cargo run --release -p hindsight-spike -- seek <clip.opus> <seconds>` |
+| Run the app with hours already held (debug builds only) | `cargo run --release -p hindsight-spike -- demo 72`, then `HINDSIGHT_FILL=$PWD/demo-72-min.opus pnpm tauri dev` |
 
 Before calling a change done, run `pnpm check`, `pnpm test`, `pnpm build` and `cargo test --workspace`.
 

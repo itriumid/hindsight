@@ -16,7 +16,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::capture::{Audio, Heartbeat, Resampler, Role, choose_device, device_name, find_device, open_stream};
-use crate::encoding::{DEFAULT_COMPLEXITY, FRAME, PACKET_SECONDS, encoder, ring_for};
+use crate::encoding::{DEFAULT_COMPLEXITY, FRAME, PACKET_BYTES, PACKET_SECONDS, encoder, ring_for};
 use crate::ring::Ring;
 use crate::timeline::Timeline;
 
@@ -30,11 +30,22 @@ pub struct Settings {
     pub complexity: u8,
     /// How much audio the system hands over per wake-up; `None` lets it decide.
     pub buffer_frames: Option<u32>,
+    /// A clip to start the buffer with, as if it had just been recorded, before the microphone's
+    /// audio: for testing with hours held without waiting hours. The application only sets it in
+    /// debug builds.
+    pub start_with: Option<std::path::PathBuf>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { primary: None, fallback: None, buffer_minutes: 15.0, complexity: DEFAULT_COMPLEXITY, buffer_frames: None }
+        Settings {
+            primary: None,
+            fallback: None,
+            buffer_minutes: 15.0,
+            complexity: DEFAULT_COMPLEXITY,
+            buffer_frames: None,
+            start_with: None,
+        }
     }
 }
 
@@ -112,9 +123,18 @@ impl Recorder {
             let ring = Arc::clone(&ring);
             let input_rate = Arc::clone(&input_rate);
             let complexity = settings.complexity;
+            let start_with = settings.start_with.clone();
             std::thread::Builder::new()
                 .name("hindsight-encoder".into())
-                .spawn(move || encode(audio_receiver, ring, input_rate, complexity))
+                .spawn(move || {
+                    // Before the first of the microphone's audio, which waits in the channel.
+                    if let Some(path) = start_with
+                        && let Err(error) = start_buffer(&mut ring.lock().expect("ring"), &path)
+                    {
+                        eprintln!("couldn't start the buffer with {}: {error}", path.display());
+                    }
+                    encode(audio_receiver, ring, input_rate, complexity)
+                })
                 .expect("couldn't start the encoder thread")
         };
         let controller = {
@@ -176,6 +196,23 @@ impl Drop for Recorder {
         if let Some(encoding) = self.encoding.take() {
             let _ = encoding.join();
         }
+    }
+}
+
+/// Pushes a clip's packets into the buffer, oldest first; returns how many. Only clips made
+/// with Hindsight's encoder fit, since every slot holds one of its fixed-size packets.
+fn start_buffer(ring: &mut Ring, path: &std::path::Path) -> Result<usize, String> {
+    let mut misfit = None;
+    let count = crate::clip::for_each_packet(path, |packet| {
+        if packet.len() <= PACKET_BYTES {
+            ring.push(packet);
+        } else {
+            misfit.get_or_insert(packet.len());
+        }
+    })?;
+    match misfit {
+        Some(size) => Err(format!("it has {size}-byte packets; Hindsight's are {PACKET_BYTES}")),
+        None => Ok(count),
     }
 }
 
@@ -418,6 +455,26 @@ fn general_delay(failures: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_buffer_can_start_with_a_clip() {
+        let directory = std::env::temp_dir().join(format!("hindsight-start-with-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("earlier.opus");
+        let packets: Vec<Vec<u8>> = (0..50u8).map(|value| vec![value; PACKET_BYTES]).collect();
+        crate::clip::write(&path, packets.iter(), 48_000).unwrap();
+
+        // A ring smaller than the clip keeps its newest packets, as if they'd just been recorded.
+        let mut ring = Ring::new(30, PACKET_BYTES);
+        assert_eq!(start_buffer(&mut ring, &path).unwrap(), 50);
+        assert_eq!(ring.newest(100).collect::<Vec<_>>(), packets[20..].to_vec());
+
+        // Packets too big for a slot are refused rather than cut short.
+        let large = directory.join("large.opus");
+        crate::clip::write(&large, [vec![1u8; PACKET_BYTES + 1]].iter(), 48_000).unwrap();
+        assert!(start_buffer(&mut Ring::new(4, PACKET_BYTES), &large).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     const SECOND: Duration = Duration::from_secs(1);
 

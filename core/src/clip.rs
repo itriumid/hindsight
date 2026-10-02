@@ -57,6 +57,22 @@ pub fn write<P: AsRef<[u8]>>(
     Ok(packets.len())
 }
 
+/// Hands each Opus packet of a clip, in order, to `each`; returns how many there were.
+pub fn for_each_packet(path: &Path, mut each: impl FnMut(&[u8])) -> Result<usize, String> {
+    let mut reader = ogg::reading::PacketReader::new(BufReader::new(File::open(path).map_err(|error| error.to_string())?));
+    let mut index = 0usize;
+    while let Some(packet) = reader.read_packet().map_err(|error| error.to_string())? {
+        match index {
+            0 if !packet.data.starts_with(b"OpusHead") => return Err("not an Opus clip".into()),
+            1 if !packet.data.starts_with(b"OpusTags") => return Err("missing OpusTags".into()),
+            0 | 1 => {}
+            _ => each(&packet.data),
+        }
+        index += 1;
+    }
+    Ok(index.saturating_sub(2))
+}
+
 /// Deletes clips a crash left half-written in `directory`; returns how many.
 pub fn sweep_partials(directory: &Path) -> std::io::Result<usize> {
     let mut removed = 0;
@@ -410,6 +426,18 @@ mod tests {
         let mut samples = Vec::new();
         while reader.next(&mut samples).unwrap() {}
         assert_eq!(samples.len(), total - 2_510 * 48, "should hold everything after 2.51 s");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn every_packet_of_a_clip_comes_back_in_order() {
+        let directory = scratch("packets");
+        let path = directory.join("numbered.opus");
+        let packets: Vec<Vec<u8>> = (0..120u8).map(|value| vec![value; 40]).collect();
+        write(&path, packets.iter(), 48_000).unwrap();
+        let mut read = Vec::new();
+        assert_eq!(for_each_packet(&path, |packet| read.push(packet.to_vec())).unwrap(), 120);
+        assert_eq!(read, packets);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
