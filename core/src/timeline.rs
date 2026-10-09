@@ -7,7 +7,8 @@
 //! scrambled if it reached swap.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use opusic_c::{Channels, Decoder, SampleRate};
@@ -24,6 +25,13 @@ const WARM_UP_PACKETS: usize = 4;
 /// A loudness bar measures its loudest stretch of this many packets (100 ms), so a few words in
 /// an otherwise quiet minute still show.
 const WINDOW_PACKETS: usize = 5;
+
+/// The most cores the loudness bars use at once, however many there are: past this the bars are
+/// no faster to show, only more of the machine busy while the recorder needs its share.
+const MOST_WORKERS: usize = 6;
+
+/// Below this many packets (one minute) working the bars out on one core is already instant.
+const PARALLEL_FROM_PACKETS: usize = 3_000;
 
 /// Quieter than this counts as silence: a bar's level is never below it.
 pub const SILENCE_DB: f32 = -100.0;
@@ -55,37 +63,106 @@ impl Timeline {
     /// scale (0 is the loudest possible, `SILENCE_DB` the quietest). Each bar is its loudest
     /// 100 ms. Bars arrive newest first, since what someone wants is most likely recent, through
     /// `on_bar(index, level)`, where index 0 is the oldest; returning false stops early.
-    pub fn levels(&self, bars: usize, mut on_bar: impl FnMut(usize, f32) -> bool) -> Result<(), String> {
-        let packets = self.frozen.len();
-        let bars = bars.min(packets);
-        let mut samples = Vec::with_capacity(5760);
-        for bar in (0..bars).rev() {
-            let (start, end) = (bar * packets / bars, (bar + 1) * packets / bars);
-            let mut decoder = PacketDecoder::new()?;
-            for index in start.saturating_sub(WARM_UP_PACKETS)..start {
-                samples.clear();
-                decoder.decode(&self.frozen, index, &mut samples)?;
-            }
-            let mut loudest = 0f64;
-            let (mut sum, mut counted, mut in_window) = (0f64, 0usize, 0usize);
-            for index in start..end {
-                samples.clear();
-                decoder.decode(&self.frozen, index, &mut samples)?;
-                sum += samples.iter().map(|&sample| f64::from(sample) * f64::from(sample)).sum::<f64>();
-                counted += samples.len();
-                in_window += 1;
-                if in_window == WINDOW_PACKETS || index + 1 == end {
-                    loudest = loudest.max(sum / counted.max(1) as f64);
-                    (sum, counted, in_window) = (0.0, 0, 0);
+    ///
+    /// Bars are worked out on several cores at once, one core always left to the recorder, and
+    /// still delivered in order: a bar that finishes ahead of a newer one waits for it.
+    pub fn levels(&self, bars: usize, on_bar: impl FnMut(usize, f32) -> bool) -> Result<(), String> {
+        let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+        self.levels_on(cores.saturating_sub(1).clamp(1, MOST_WORKERS), bars, on_bar)
+    }
+
+    fn levels_on(&self, workers: usize, bars: usize, mut on_bar: impl FnMut(usize, f32) -> bool) -> Result<(), String> {
+        let bars = bars.min(self.frozen.len());
+        // Threads cost more than they save on a short timeline.
+        let workers = if self.frozen.len() < PARALLEL_FROM_PACKETS { 1 } else { workers.min(bars) };
+        if workers <= 1 {
+            let mut measuring = Measuring::new()?;
+            for bar in (0..bars).rev() {
+                if !on_bar(bar, self.level(bar, bars, &mut measuring)?) {
+                    break;
                 }
             }
-            samples.fill(0.0);
-            let level = if loudest > 0.0 { (10.0 * loudest.log10()) as f32 } else { SILENCE_DB };
-            if !on_bar(bar, level.max(SILENCE_DB)) {
-                break;
+            return Ok(());
+        }
+
+        // Workers take the newest bar nobody has taken yet; the next one to hand over is `next`.
+        let unclaimed = AtomicUsize::new(bars);
+        let stopped = AtomicBool::new(false);
+        let (sender, receiver) = mpsc::channel::<Result<(usize, f32), String>>();
+        let mut waiting: Vec<Option<f32>> = vec![None; bars];
+        let mut next = bars;
+        let mut outcome = Ok(());
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                let sender = sender.clone();
+                let (unclaimed, stopped) = (&unclaimed, &stopped);
+                scope.spawn(move || {
+                    let mut measuring = match Measuring::new() {
+                        Ok(measuring) => measuring,
+                        Err(error) => return drop(sender.send(Err(error))),
+                    };
+                    while !stopped.load(Ordering::Relaxed) {
+                        let claimed = unclaimed.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(1));
+                        let Ok(previous) = claimed else { break };
+                        let bar = previous - 1;
+                        let result = self.level(bar, bars, &mut measuring).map(|level| (bar, level));
+                        let failed = result.is_err();
+                        if sender.send(result).is_err() || failed {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(sender);
+            for result in receiver {
+                match result {
+                    Ok((bar, level)) => waiting[bar] = Some(level),
+                    Err(error) => {
+                        outcome = Err(error);
+                        stopped.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                }
+                while next > 0 {
+                    let Some(level) = waiting[next - 1].take() else { break };
+                    next -= 1;
+                    if !on_bar(next, level) {
+                        stopped.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            }
+        });
+        outcome
+    }
+
+    /// The level of bar `bar` of `bars`: its loudest 100 ms.
+    fn level(&self, bar: usize, bars: usize, measuring: &mut Measuring) -> Result<f32, String> {
+        let packets = self.frozen.len();
+        let (start, end) = (bar * packets / bars, (bar + 1) * packets / bars);
+        // A fresh decoder for every bar, warmed up on the packets before it.
+        measuring.decoder = PacketDecoder::new()?;
+        let samples = &mut measuring.samples;
+        for index in start.saturating_sub(WARM_UP_PACKETS)..start {
+            samples.clear();
+            measuring.decoder.decode(&self.frozen, index, samples)?;
+        }
+        let mut loudest = 0f64;
+        let (mut sum, mut counted, mut in_window) = (0f64, 0usize, 0usize);
+        for index in start..end {
+            samples.clear();
+            measuring.decoder.decode(&self.frozen, index, samples)?;
+            sum += samples.iter().map(|&sample| f64::from(sample) * f64::from(sample)).sum::<f64>();
+            counted += samples.len();
+            in_window += 1;
+            if in_window == WINDOW_PACKETS || index + 1 == end {
+                loudest = loudest.max(sum / counted.max(1) as f64);
+                (sum, counted, in_window) = (0.0, 0, 0);
             }
         }
-        Ok(())
+        samples.fill(0.0);
+        let level = if loudest > 0.0 { (10.0 * loudest.log10()) as f32 } else { SILENCE_DB };
+        Ok(level.max(SILENCE_DB))
     }
 
     /// Saves `start` to `end` as a clip at `path`, atomically, the way every clip is written.
@@ -114,6 +191,24 @@ impl Drop for Wiped {
             unsafe { std::ptr::write_volatile(byte, 0) };
         }
         std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// What one worker measures with: a decoder and the samples it decodes into.
+struct Measuring {
+    decoder: PacketDecoder,
+    samples: Vec<f32>,
+}
+
+impl Measuring {
+    fn new() -> Result<Measuring, String> {
+        Ok(Measuring { decoder: PacketDecoder::new()?, samples: Vec::with_capacity(5760) })
+    }
+}
+
+impl Drop for Measuring {
+    fn drop(&mut self) {
+        self.samples.fill(0.0);
     }
 }
 
@@ -248,6 +343,37 @@ mod tests {
         for quiet in 11..20 {
             assert!(level(quiet) < -60.0, "bar {quiet} of the silence measured {}", level(quiet));
         }
+    }
+
+    #[test]
+    fn levels_on_many_cores_match_one_core_and_stay_in_order() {
+        // Four minutes, so the parallel path is taken: tone, silence, a quieter tone, silence.
+        let timeline = timeline(&[(60, 0.5), (60, 0.0), (60, 0.1), (60, 0.0)]);
+        let measure = |workers: usize| {
+            let mut bars = Vec::new();
+            timeline.levels_on(workers, 240, |index, level| {
+                bars.push((index, level));
+                true
+            })
+            .unwrap();
+            bars
+        };
+        let one = measure(1);
+        let many = measure(5);
+        assert_eq!(many.iter().map(|(index, _)| *index).collect::<Vec<_>>(), (0..240).rev().collect::<Vec<_>>(), "newest first");
+        assert_eq!(many, one, "the same levels, whatever the cores");
+    }
+
+    #[test]
+    fn levels_on_many_cores_stop_when_asked() {
+        let timeline = timeline(&[(120, 0.3)]);
+        let mut seen = Vec::new();
+        timeline.levels_on(4, 120, |index, _| {
+            seen.push(index);
+            seen.len() < 3
+        })
+        .unwrap();
+        assert_eq!(seen, vec![119, 118, 117]);
     }
 
     #[test]
