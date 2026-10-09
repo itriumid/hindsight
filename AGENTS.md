@@ -29,7 +29,7 @@ These apply to every task.
 
 ## Read these when the task calls for it
 
-Don't load them upfront; read the one that applies.
+Before acting on a task in this table, read the file it points to. The others can wait until a task needs them.
 
 | Doing this                                                                                    | Read                                                 |
 | --------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
