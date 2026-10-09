@@ -1,6 +1,6 @@
 [package]
 name = "hindsight"
-version = "0.2.0"
+version = "0.2.1"
 description = "Keep the last few minutes of what was said, in case you need them."
 authors = ["Itrium"]
 edition.workspace = true
