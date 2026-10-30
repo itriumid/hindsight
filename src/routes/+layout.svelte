@@ -2,7 +2,7 @@
   import "@itrium/palettes/palettes.css";
   import "../app.css";
   import { onMount } from "svelte";
-  import { theme } from "$lib/theme";
+  import { theme } from "#lib/theme.js";
 
   let { children } = $props();
 

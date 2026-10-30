@@ -3,6 +3,9 @@
   "version": "0.2.1",
   "description": "Keep the last few minutes of what was said, in case you need them.",
   "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
   "private": true,
   "license": "MIT",
   "scripts": {
@@ -20,8 +23,8 @@
     "@tauri-apps/api": "^2.12.1"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/adapter-static": "^4.0.0",
+    "@sveltejs/kit": "^3.1.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tauri-apps/cli": "^2.12.1",
     "svelte": "^5.57.1",
