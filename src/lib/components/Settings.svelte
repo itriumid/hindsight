@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { PalettePicker, ThemeSwitcher } from "@itrium/palettes";
-  import HotkeyRecorder from "$lib/components/HotkeyRecorder.svelte";
-  import { theme } from "$lib/theme";
+  import HotkeyRecorder from "#lib/components/HotkeyRecorder.svelte";
+  import { theme } from "#lib/theme.js";
 
   export interface SettingsView {
     welcomed: boolean;

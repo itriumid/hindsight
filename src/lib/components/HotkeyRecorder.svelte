@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { commonConflict, formatHotkey, fromKeyboardEvent, requiredModifiers } from "$lib/hotkey";
+  import { commonConflict, formatHotkey, fromKeyboardEvent, requiredModifiers } from "#lib/hotkey.js";
 
   let {
     hotkey,

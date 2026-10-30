@@ -2,10 +2,10 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import Clips from "$lib/components/Clips.svelte";
-  import Settings, { type SettingsView } from "$lib/components/Settings.svelte";
-  import Timeline from "$lib/components/Timeline.svelte";
-  import Welcome from "$lib/components/Welcome.svelte";
+  import Clips from "#lib/components/Clips.svelte";
+  import Settings, { type SettingsView } from "#lib/components/Settings.svelte";
+  import Timeline from "#lib/components/Timeline.svelte";
+  import Welcome from "#lib/components/Welcome.svelte";
 
   interface Status {
     microphone: string | null;
