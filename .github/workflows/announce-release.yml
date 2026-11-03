@@ -1,0 +1,51 @@
+name: Announce release
+
+# Publishing a release posts it in #releases on Itrium's Discord server: the notes, and a
+# download link for Mac, Windows and Linux. It notifies nobody. The message is built by
+# scripts/announce_release.py.
+#
+# Run it manually (Actions → Announce release → Run workflow) with a tag to post a release
+# again, for example after the first run failed.
+#
+# The DISCORD_RELEASES_WEBHOOK secret holds the webhook address of #releases. Set it with the
+# Discord portal's github-secret command, which hands the address to gh without showing it.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag of the release to post, such as v0.3.2'
+        required: true
+        type: string
+
+# Any `permissions:` block replaces the default token scopes, so grant per job.
+permissions: {}
+
+jobs:
+  announce:
+    name: Announce on Discord
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Get the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT" = release ]; then
+            jq .release "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/release.json"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RUNNER_TEMP/release.json"
+          fi
+      - name: Post it on Discord
+        env:
+          DISCORD_RELEASES_WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK }}
+        run: python3 scripts/announce_release.py "$RUNNER_TEMP/release.json"
