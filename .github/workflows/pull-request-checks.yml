@@ -98,9 +98,11 @@ jobs:
               per_page: 100,
             });
 
-            // Filenames a tool dictates are not attribution; strip them before matching.
-            const allowedFilenames = /\b(CLAUDE|AGENTS|GEMINI)\.md\b/gi;
-            const vendors = /\b(claude|anthropic|openai|chatgpt|gpt-?\d|copilot|gemini|windsurf)\b/i;
+            // Filenames and settings directories a tool dictates are not attribution; strip them
+            // before matching.
+            const allowedFilenames = /\b(CLAUDE|AGENTS|GEMINI)\.md\b|\.(claude|gemini|windsurf)\b[\w./-]*/gi;
+            const vendors =
+              /\b(claude|anthropic|openai|chatgpt|gpt-?\d|codex|copilot|gemini|windsurf|devin|aider)\b/i;
             const attribution = [
               { pattern: /^co-authored-by:.*(\[bot\]|noreply@(anthropic|openai)\.com)/im, reason: 'a bot co-author trailer' },
               { pattern: /\bgenerated with/i, reason: '"generated with"' },
