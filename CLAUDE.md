@@ -10,3 +10,16 @@
   approval once, and declining disables it permanently and silently. AGENTS.md tells the agent
   to *read* those files on demand instead, which isn't gated.
 -->
+
+## Choosing a model for a subagent
+
+`.claude/settings.json` starts a session on the strongest model and its subagents on a lighter
+one. That subagent default fits a well-scoped task with a clear way to check the result. It is a
+default, not a limit — set the model on the individual subagent when the task calls for it:
+
+- **Lighter still** for mechanical work: searching, listing, renaming, edits that follow a
+  pattern already written down.
+- **The session's own model** when the task needs judgment a lighter model is likely to get
+  wrong — an unclear root cause, a design choice, a change that crosses several modules.
+
+A task too unclear to choose a model for is too unclear to hand to a subagent yet.
