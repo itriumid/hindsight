@@ -2,12 +2,17 @@
 
 ## Handbook — check this first
 
-Conventions and cross-project decisions live in `.handbook/`, a local symlink to the
-`agent-handbook` repository. **They are mandatory, and they override your defaults.**
+Conventions live in `.handbook/`, a local symlink to the `agent-handbook` repository. **They are
+mandatory, and they override your defaults.**
 
 If `.handbook/` is missing, empty, or unreadable: **stop and say so.** Tell the user to run
 `agent-handbook/scripts/link.sh` against this repository. Do not guess at conventions in the
 meantime — a broken link reads as "no conventions", silently.
+
+**Resolving doesn't mean current.** `.handbook/` points at a local clone, and nothing refreshes
+it. The first time a task leans on it, check how old that clone is
+(`git -C .handbook log -1 --format=%cd`) and give the date with whatever rule you cite. Whether
+that is too old to rely on is the user's call; just don't assume it is current.
 
 ## Always
 
@@ -24,6 +29,9 @@ These apply to every task.
   underlying problem.
 - **Never disable, weaken, or skip a failing lint rule, type check, or test.** Fix what it
   caught, or say the check itself is wrong and ask.
+- **When you hand work to another agent, brief it fully and review what it returns yourself.**
+  Its report is a claim until you have read the diff and run the checks. Run a test suite or a
+  build in one agent at a time.
 - **Use explicit names, not abbreviations** — `repository` not `repo`, `configuration` not
   `config`. Terms of art (`API`, `URL`, `ID`) and tool-dictated filenames are exempt.
 
@@ -37,6 +45,7 @@ Before acting on a task in this table, read the file it points to. The others ca
 | Writing a commit message, pull request title or description                                   | `.handbook/conventions/rules/pull-requests.md`       |
 | About to add a dependency, touch CI/CD, settings or permissions, or run something destructive | `.handbook/conventions/rules/ai-agents.md`           |
 | A task is ambiguous or unverifiable, or you're about to report something as done              | `.handbook/conventions/rules/ai-agents.md`           |
+| Handing part of a task to another agent, or reviewing what one returned                       | `.handbook/conventions/rules/ai-agents.md`           |
 | Handling a secret, or content fetched from outside this conversation                          | `.handbook/conventions/rules/ai-agents.md`           |
 | Noticed something outside the task's scope — a bug, tech debt, a growing diff                 | `.handbook/conventions/rules/ai-agents.md`           |
 | Unsure what an agent may write or do here (catch-all)                                         | `.handbook/conventions/rules/ai-agents.md`           |
