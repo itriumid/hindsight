@@ -139,3 +139,133 @@ jobs:
             } else {
               core.info(`Checked the title, description and ${commits.length} commit(s): no attribution found.`);
             }
+
+      - name: Check the description and commits are written for a reader who wasn't there
+        # Runs even when the attribution step fails, so one push reports both.
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // Enforces "Write for a reader who wasn't there" and the three headings from the
+            // handbook's conventions/rules/pull-requests.md. The patterns are narrow: each is a reply to
+            // the requester or an account of the session, so a description that passes can still break
+            // the rule. See conventions/background/git-workflow.md.
+            function reviewDescription(body, { isDescription }) {
+              const findings = [];
+              const text = (body || '').replace(/\r\n/g, '\n').replace(/<!--[\s\S]*?-->/g, '');
+
+              // Fenced blocks open with three or more backticks or tildes and close only on a fence of the
+              // same character at least as long. A heading inside one is an example, not a section; its
+              // lines still count as content of the section around it, so a command-only How to verify
+              // isn't empty.
+              const outsideFences = [];
+              const sections = {};
+              let current = null;
+              let fence = null;
+              for (const line of text.split('\n')) {
+                const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
+                const heading = !fence && !marker && line.match(/^##\s+(.+?)\s*$/);
+                if (heading) {
+                  current = heading[1];
+                  sections[current] = '';
+                } else if (current && !/^---\s*$/.test(line) && !/^\s*- \[[ x]\].*(Merging with|label applied)/i.test(line)) {
+                  sections[current] += line.trim();
+                }
+                if (fence) {
+                  if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length &&
+                      /^ {0,3}[`~]+\s*$/.test(line)) fence = null;
+                } else if (marker) {
+                  fence = marker[1];
+                } else {
+                  outsideFences.push(line);
+                }
+              }
+
+              // Words inside code, quotes and comments are someone else's: interface copy, commands, the
+              // template's own instructions.
+              const prose = outsideFences
+                .join('\n')
+                .replace(/`[^`\n]*`/g, '')
+                .replace(/^\s*>.*$/gm, '')
+                .replace(/"[^"\n]*"|“[^”\n]*”/g, '')
+                .replace(/(^|[^*\w])\*(?!\*)[^*\n]+\*(?!\*)/g, '$1');
+
+              if (isDescription) {
+                for (const heading of ['Why', 'What changed', 'How to verify']) {
+                  if (!(heading in sections)) findings.push(`no "## ${heading}" heading`);
+                  else if (!sections[heading]) findings.push(`"## ${heading}" is empty`);
+                }
+              }
+
+              // Narrow on purpose: each pattern is a reply to the requester or an account of the session,
+              // never a description of what a user sees.
+              const outsideVerify = isDescription ? prose.split(/^##\s+How to verify\s*$/m)[0] : prose;
+              const phrases = [
+                { pattern: /\b(you|we)\s+(asked|chose|picked|wanted|preferred|approved|agreed|decided|requested|rejected)\b/i, reason: 'reports a decision as "you" or "we"' },
+                { pattern: /\byour\s+(call|choice|decisions?|requests?|asks?|feedback|picks?)\b/i, reason: 'addresses the requester' },
+                { pattern: /\bI(?:'ve)?\s+(took|ran|checked|chose|tried|kept|went|picked|decided|added|left|broke|put|corrected|confirmed|tested|verified|fixed|dropped|removed|changed|wrote|found|noticed|didn't|did not|deliberately)\b/, reason: 'narrates as "I"' },
+                { pattern: /\bI'(ll|m|d)\b/, reason: 'narrates as "I"' },
+                { pattern: /\bas (discussed|agreed|requested)\b/i, reason: 'refers to a conversation' },
+                { pattern: /\bworth knowing\b/i, reason: 'has a "worth knowing" note' },
+                { pattern: /\b(highest|best|lowest) so far\b/i, reason: 'reports a score from the run' },
+                { pattern: /\bscored\s+(it\s+|the \w+\s+)?\d+\s*(\/|of|out of)\s*\d+/i, reason: 'reports a score from the run' },
+                { pattern: /\(\d{1,2}\/(20|24|28|40)\)/, reason: 'reports a score from the run' },
+                { pattern: /\bwe\s+(want|need|needed|took|ran|checked|tried|kept|went|mapped|found|noticed|didn't|did not)\b/i, reason: 'narrates as "we"' },
+                { pattern: /\b(today's|yesterday's|this morning's|afternoon|evening|morning|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) (critique|review)\b/i, reason: 'narrates the session' },
+                { pattern: /\b(this|last|next|previous|another) round\b|\b(design|playtest) round\b/i, reason: 'narrates the session' },
+                { pattern: /^\s*(?:[-*]\s+)?(?:\*\*)?(To do|Still to do|Still needed|Still to come|Not yet|Next steps?|Follow-ups?)\b[^\n]*:/m, reason: 'lists unfinished work' },
+              ];
+              for (const { pattern, reason } of phrases) {
+                const match = prose.match(pattern);
+                if (match) findings.push(`${reason}: "${match[0]}"`);
+              }
+              const openTask = prose
+                .split('\n')
+                .find((line) => /^\s*[-*] \[ \]/.test(line) && !/Merging with|label applied/.test(line));
+              if (openTask) findings.push(`has an unfinished task: "${openTask.trim()}"`);
+              if (isDescription && /\bstacked on #\d+|\bmerge (that|#\d+|it) first\b/i.test(outsideVerify)) {
+                findings.push('has a merge-order note outside How to verify');
+              }
+              if (isDescription && /\bbefore merging\b/i.test(outsideVerify)) {
+                findings.push('has a "before merging" note outside How to verify');
+              }
+              return findings;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              ...context.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            // Dependabot and GitHub's revert button write their own text.
+            const generated = pr.user.login === 'dependabot[bot]' || /^revert-\d+-/.test(pr.head.ref);
+            const findings = [];
+            if (!generated) {
+              for (const finding of reviewDescription(pr.body, { isDescription: true })) {
+                findings.push(`Pull request description: ${finding}`);
+              }
+            }
+            for (const commit of commits) {
+              if (commit.author?.login === 'dependabot[bot]') continue;
+              for (const finding of reviewDescription(commit.commit.message, { isDescription: false })) {
+                findings.push(`Commit ${commit.sha.slice(0, 7)}: ${finding}`);
+              }
+            }
+
+            if (findings.length) {
+              core.setFailed(
+                [
+                  'The description or a commit message breaks the description rules:',
+                  ...findings.map((finding) => `  - ${finding}`),
+                  'Edit the description (the check re-runs on edit) or reword the commit, then push.',
+                  'Rules: https://github.com/itriumid/agent-handbook/blob/main/conventions/rules/pull-requests.md#write-for-a-reader-who-wasnt-there',
+                ].join('\n'),
+              );
+            } else {
+              core.info(`Checked the description and ${commits.length} commit(s): written for a reader who wasn't there.`);
+            }
